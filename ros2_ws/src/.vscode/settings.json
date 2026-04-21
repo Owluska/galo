@@ -1,0 +1,31 @@
+{
+  "terminal.integrated.defaultProfile.linux": "zsh",
+  "terminal.integrated.env.linux": {
+    "TERM": "xterm-256color"
+  },
+  "python.defaultInterpreterPath": "/usr/bin/python3",
+  "files.associations": {
+    "*.repos": "yaml"
+  },
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.detectIndentation": false,
+  "editor.formatOnSave": true,
+  "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+  "C_Cpp.default.compilerPath": "/usr/bin/g++",
+  "C_Cpp.clang_format_style": "{ BasedOnStyle: Google, IndentWidth: 2 }",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "C_Cpp.default.defines": [
+    "RCUTILS_LOGGING_USE_STDOUT=1"
+  ],
+  "C_Cpp.default.includePath": [
+    "/opt/ros/humble/include/**",
+    "${workspaceFolder}/install/**",
+    "${workspaceFolder}/src/**"
+  ],
+  "C_Cpp.default.browse.path": [
+    "/opt/ros/humble/include",
+    "${workspaceFolder}/install",
+    "${workspaceFolder}/src"
+  ]
+}
