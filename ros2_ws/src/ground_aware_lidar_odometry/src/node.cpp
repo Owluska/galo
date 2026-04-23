@@ -3,6 +3,8 @@
 #include <functional>
 
 GALONode::GALONode() : Node("GALONode") {
+  deskew_algo_ = std::make_shared<DeskewAlgorithm>(
+      deskew_prms_, this->get_logger(), *this->get_clock());
   lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
       "/Sensor/lidar_front/rslidar_points", 10,
       std::bind(&GALONode::LidarCb, this, std::placeholders::_1));
@@ -11,28 +13,28 @@ GALONode::GALONode() : Node("GALONode") {
       "/Sensor/imu_front/data", 1,
       std::bind(&GALONode::ImuCb, this, std::placeholders::_1));
 
-  pure_state_sub_ = this->create_subscription<user_msgs::msg::PureState>(
-      "/SC/pure_state", 1,
-      std::bind(&GALONode::PureStateCb, this, std::placeholders::_1));
+  deskew_cld_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/GALO/deskewed_cloud", 1);
 }
 
 void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-  auto deskewd = deskew_algo_->ProcessCloud(msg);
+  std::optional<sensor_msgs::msg::PointCloud2> deskewed;
+  {
+    std::lock_guard<std::mutex> lock(mut_);
+    deskew_algo_->UpdateLidarQueue(msg);
+    deskewed = deskew_algo_->ProcessCloudsQueue();
+  }
+  if (deskewed) {
+    deskew_cld_pub_->publish(*deskewed);
+  }
 }
 
 void GALONode::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
-  if (!deskew_algo_) {
-    deskew_algo_ =
-        std::make_shared<DeskewAlgorithm>(deskew_prms_, this->get_logger());
-  }
   rclcpp::Time msg_time(msg->header.stamp);
-  deskew_algo_->UpdateQueue(last_speed_, msg->angular_velocity.z,
-                            msg_time.seconds());
-}
-
-void GALONode::PureStateCb(const user_msgs::msg::PureState::SharedPtr msg) {
-  last_speed_ = std::hypot(msg->velocity.linear.x, msg->velocity.linear.y,
-                           msg->velocity.linear.z);
+  {
+    std::lock_guard<std::mutex> lock(mut_);
+    deskew_algo_->UpdateImuQueue(msg->angular_velocity.z, msg_time.seconds());
+  }
 }
 
 int main(int argc, char* argv[]) {
