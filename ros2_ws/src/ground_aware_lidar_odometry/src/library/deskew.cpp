@@ -7,10 +7,6 @@ DeskewAlgorithm::DeskewAlgorithm(const DeskewParams& params,
   lidar_queue_.Resize(prms_.lidar_queue_size);
 };
 
-bool DeskewAlgorithm::isFinitePoint(float x, float y, float z) const {
-  return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
-}
-
 double DeskewAlgorithm::PointTimeFromIndex(double relative_time,
                                            double scan_header_time) const {
   const double scan_start = prms_.stamp_is_scan_end_
@@ -30,7 +26,7 @@ void DeskewAlgorithm::UnwrapAzimuthParams(
   azs_.Reset(n);
 
   for (size_t idx = 0; idx < n; ++idx, ++x_it, ++y_it) {
-    if (!isFinitePoint(*x_it, *y_it)) continue;
+    if (!IsFinitePoint(*x_it, *y_it)) continue;
 
     double az = std::atan2(*y_it, *x_it);
     if (az < 0.0) az += 2.0 * M_PI;
@@ -87,7 +83,7 @@ DeskewAlgorithm::ProcessCloudsQueue() {
     const float x = *x_it;
     const float y = *y_it;
 
-    if (!isFinitePoint(x, y)) {
+    if (!IsFinitePoint(x, y)) {
       // RCLCPP_WARN(logger_, "Infinite point");
       continue;
     }

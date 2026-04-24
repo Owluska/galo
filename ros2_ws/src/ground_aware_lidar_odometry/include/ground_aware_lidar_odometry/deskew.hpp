@@ -7,9 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/point_cloud2.hpp"
-#include "sensor_msgs/point_cloud2_iterator.hpp"
+#include "ground_aware_lidar_odometry/utils.hpp"
 
 struct YawRateStamped {
   double time;
@@ -97,7 +95,7 @@ class FiniteDeque {
 class DeskewAlgorithm {
  private:
   FiniteDeque<YawRateStamped> imu_queue_;
-  FiniteDeque<sensor_msgs::msg::PointCloud2::SharedPtr> lidar_queue_;
+  FiniteDeque<CloudMsg::SharedPtr> lidar_queue_;
   DeskewParams prms_;
   rclcpp::Logger logger_;
   rclcpp::Clock clock_;
@@ -105,9 +103,7 @@ class DeskewAlgorithm {
   double PointTimeFromIndex(double relative_time,
                             double scan_header_time) const;
 
-  bool isFinitePoint(float x, float y, float z = .0f) const;
-
-  void UnwrapAzimuthParams(const sensor_msgs::msg::PointCloud2& msg);
+  void UnwrapAzimuthParams(const CloudMsg& msg);
 
  public:
   DeskewAlgorithm(const DeskewParams& params, const rclcpp::Logger& logger,
@@ -120,8 +116,8 @@ class DeskewAlgorithm {
     imu_queue_.Update(rate);
   }
 
-  void UpdateLidarQueue(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+  void UpdateLidarQueue(const CloudMsg::SharedPtr msg) {
     lidar_queue_.Update(msg);
   }
-  std::optional<sensor_msgs::msg::PointCloud2> ProcessCloudsQueue();
+  std::optional<CloudMsg> ProcessCloudsQueue();
 };

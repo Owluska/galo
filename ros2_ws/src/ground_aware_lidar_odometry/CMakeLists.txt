@@ -18,6 +18,9 @@ find_package(user_msgs REQUIRED)
 
 set(LIB_SOURCES
   src/library/deskew.cpp
+  src/library/segmentation.cpp
+  src/library/utils.cpp
+
 )
 add_executable(node src/node.cpp ${LIB_SOURCES})
 ament_target_dependencies(node rclcpp std_msgs sensor_msgs user_msgs)
