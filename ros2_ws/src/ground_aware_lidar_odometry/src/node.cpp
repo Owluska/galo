@@ -2,9 +2,12 @@
 
 #include <functional>
 
-GALONode::GALONode()
+GALONode::GALONode(const GALONodeParams& node_params)
     : Node("GALONode"),
+      node_params_(node_params),
       segmentation_(segementation_params_),
+      ground_patches_extractor_(ground_patch_params_),
+      ground_registration_(ground_registration_params_),
       deskew_algo_(deskew_prms_, this->get_logger(), *this->get_clock()) {
   lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
       "/Sensor/lidar_front/rslidar_points", 10,
@@ -18,21 +21,72 @@ GALONode::GALONode()
       "/GALO/deskewed_cloud", 1);
   colored_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/GALO/colored_cloud", 1);
+  ground_patches_pub_ =
+      this->create_publisher<visualization_msgs::msg::MarkerArray>(
+          "/GALO/ground_patch_normals", 10);
+  translation_pub_ =
+      this->create_publisher<geometry_msgs::msg::Point>("/GALO/translation", 1);
+  eulers_pub_ =
+      this->create_publisher<geometry_msgs::msg::Point>("/GALO/eulers", 1);
 }
 
 void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+  time_measurments.clear();
   std::optional<sensor_msgs::msg::PointCloud2> deskewed;
   {
+    TimeMeasurments_t meas("deskew");
     std::lock_guard<std::mutex> lock(mut_);
     deskew_algo_.UpdateLidarQueue(msg);
     deskewed = deskew_algo_.ProcessCloudsQueue();
+    meas.SetEnd();
+    time_measurments.push_back(meas);
   }
   if (!deskewed) return;
 
   deskew_cld_pub_->publish(*deskewed);
-  auto result = segmentation_.Classify(*deskewed);
-  auto colored = segmentation_.MakeColoredCloud(result);
-  colored_pub_->publish(colored);
+  TimeMeasurments_t seg_meas("segmentaion");
+  auto segmentation_result = segmentation_.Classify(*deskewed);
+  seg_meas.SetEnd();
+  time_measurments.push_back(seg_meas);
+  if (node_params_.debug) {
+    auto colored_cld = segmentation_.MakeColoredCloud(segmentation_result);
+    colored_pub_->publish(colored_cld);
+  }
+  TimeMeasurments_t extraction_meas("ground_extration");
+  std::vector<GroundPatch> cur_patches =
+      ground_patches_extractor_.Extract(*deskewed, segmentation_result.labels);
+  extraction_meas.SetEnd();
+  time_measurments.push_back(extraction_meas);
+  if (node_params_.debug) {
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "patches=%zu", cur_patches.size());
+    auto patches_marker =
+        ground_patches_extractor_.MakeGroundPatchMarkers(deskewed->header);
+    ground_patches_pub_->publish(patches_marker);
+  }
+  if (!ground_map_.empty()) {
+    TimeMeasurments_t registration_meas("ground_registration");
+    auto reg_result = ground_registration_.Align(cur_patches, ground_map_);
+    time_measurments.push_back(registration_meas);
+    if (reg_result.valid) {
+      // reg_result.R and reg_result.t contain ground alignment correction
+      // mostly roll, pitch, z
+      geometry_msgs::msg::Point translation_msg;
+      translation_msg.x = reg_result.t.x();
+      translation_msg.y = reg_result.t.y();
+      translation_msg.z = reg_result.t.z();
+      translation_pub_->publish(translation_msg);
+
+      geometry_msgs::msg::Point eulers_msg;
+      auto eulers = reg_result.R.eulerAngles(0, 1, 2);
+      eulers_msg.x = eulers.x();
+      eulers_msg.x = eulers.y();
+      eulers_msg.x = eulers.z();
+      eulers_pub_->publish(eulers_msg);
+    }
+  }
+  ground_map_ = cur_patches;
+  PrintTimeMeasurments(time_measurments);
 }
 
 void GALONode::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -43,9 +97,28 @@ void GALONode::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
   }
 }
 
+void GALONode::PrintTimeMeasurments(
+    const std::vector<TimeMeasurments_t>& measurments) {
+  if (measurments.empty()) return;
+  std::stringstream ss;
+  ss << "Time measurments (ms): ";
+
+  bool first = true;
+  for (auto m : measurments) {
+    if (first)
+      first = false;
+    else
+      ss << ", ";
+    ss << m.label << " - " << GetDelayMs(m.start, m.end);
+  }
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "%s",
+                       ss.str().c_str());
+}
+
 int main(int argc, char* argv[]) {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<GALONode>();
+  GALONodeParams prms;
+  auto node = std::make_shared<GALONode>(prms);
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

@@ -13,7 +13,9 @@ find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(user_msgs REQUIRED)
 
 set(LIB_SOURCES
@@ -23,7 +25,7 @@ set(LIB_SOURCES
 
 )
 add_executable(node src/node.cpp ${LIB_SOURCES})
-ament_target_dependencies(node rclcpp std_msgs sensor_msgs user_msgs)
+ament_target_dependencies(node rclcpp std_msgs visualization_msgs sensor_msgs geometry_msgs user_msgs)
 target_link_libraries(node
   Eigen3::Eigen
 )

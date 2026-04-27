@@ -147,11 +147,12 @@ DeskewAlgorithm::ProcessCloudsQueue() {
 
     *x_it = rx;
     *y_it = ry;
-
-    RCLCPP_INFO_THROTTLE(
-        logger_, clock_, prms_.log_throttle,
-        "idx=%zu t=%.6f dt=%.4f alpha=%.2f rate=%.3f dyaw=%.4f", idx,
-        point_time, deskew_dt, alpha, rate, dyaw);
+    if (prms_.debug) {
+      RCLCPP_INFO_THROTTLE(
+          logger_, clock_, prms_.log_throttle,
+          "idx=%zu t=%.6f dt=%.4f alpha=%.2f rate=%.3f dyaw=%.4f", idx,
+          point_time, deskew_dt, alpha, rate, dyaw);
+    }
   }
   lidar_queue_.PopFront();
   return out;

@@ -1,4 +1,6 @@
 #pragma once
+#include <math.h>
+
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <deque>
@@ -64,6 +66,7 @@ struct DeskewParams {
   double scan_period_ = 0.1;
   bool stamp_is_scan_end_ = true;
   int log_throttle = 2000;  // ms
+  int debug = 0;
 };
 
 template <typename T>
