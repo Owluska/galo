@@ -48,6 +48,14 @@ struct GroundRegistrationParams {
   double max_dz = 0.1;     // meters
   double max_roll = 0.02;  // ~1°
   double max_pitch = 0.02;
+  double damping_z = 1e-3;
+  double damping_roll = 1e-2;
+  double damping_pitch = 1e-2;
+  double min_x_span_for_pitch = 8.0;
+  double min_y_span_for_roll = 6.0;
+  double imu_roll_weight = 100.0;
+  double imu_pitch_weight = 100.0;
+  bool use_imu_prior = true;
 };
 
 struct GridCell {
@@ -56,7 +64,15 @@ struct GridCell {
 };
 
 struct PatchCell {
-  std::vector<Eigen::Vector3d> points;
+  int count = 0;
+  Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+  Eigen::Matrix3d sum_outer = Eigen::Matrix3d::Zero();
+
+  void AddPoint(const Eigen::Vector3d& p) {
+    ++count;
+    sum += p;
+    sum_outer += p * p.transpose();
+  }
 };
 
 struct SegmentationResult {
@@ -130,7 +146,8 @@ class GroundRegistration {
   explicit GroundRegistration(const GroundRegistrationParams& params)
       : params_(params) {}
   GroundRegistrationResult Align(const std::vector<GroundPatch>& map,
-                                 const std::vector<GroundPatch>& current);
+                                 const std::vector<GroundPatch>& current,
+                                 const Eigen::Matrix3d& R_imu_delta) const;
 
  private:
   GroundRegistrationParams params_;
@@ -139,6 +156,7 @@ class GroundRegistration {
 
   static Eigen::Matrix3d ExpSO3(const Eigen::Vector3d& w);
 
+  static Eigen::Vector3d LogSO3(const Eigen::Matrix3d& R);
   int FindNearestPatch(const Eigen::Vector3d& p, const Eigen::Vector3d& normal,
                        const std::vector<GroundPatch>& map) const;
 };

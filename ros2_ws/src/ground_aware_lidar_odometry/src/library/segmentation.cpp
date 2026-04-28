@@ -199,50 +199,42 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     auto [ix, iy] = GetIndexes(x, y);
     CellKey key{ix, iy};
     PatchCell& cell = patches_[key];
-    Eigen::Vector3d point(x, y, z);
-    cell.points.push_back(point);
+    cell.AddPoint(Eigen::Vector3d(x, y, z));
   }
 
   for (const auto& [key, patch_cell] : patches_) {
-    const auto& pts = patch_cell.points;
-    const int N = pts.size();
+    const int N = patch_cell.count;
     if (N < params_.min_points) continue;
-    Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
 
-    for (const auto& pt : pts) {
-      centroid += pt;
-    }
-    centroid /= static_cast<double>(N);
-    Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
-    for (const auto& p : pts) {
-      Eigen::Vector3d d = p - centroid;
-      cov += d * d.transpose();  // outer product;
-    }
-    cov /= static_cast<double>(N);
+    const double inv_N = 1.0 / static_cast<double>(N);
+
+    Eigen::Vector3d centroid = patch_cell.sum * inv_N;
+
+    Eigen::Matrix3d cov =
+        patch_cell.sum_outer * inv_N - centroid * centroid.transpose();
+
+    cov = 0.5 * (cov + cov.transpose());  // numerical safety
+
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(cov);
-    if (solver.info() != Eigen::Success) {
-      continue;
-    }
+    if (solver.info() != Eigen::Success) continue;
+
     Eigen::Vector3d eigenvalues = solver.eigenvalues();
     Eigen::Matrix3d eigenvectors = solver.eigenvectors();
-    Eigen::Vector3d normal = eigenvectors.col(0);  // smallest eigenvalue
 
-    if (normal.z() < 0.0) {  // make normal point upward
-      normal = -normal;
-    }
-    double lambda0 = eigenvalues(0);
+    Eigen::Vector3d normal = eigenvectors.col(0);
+    if (normal.z() < 0.0) normal = -normal;
+
+    double lambda0 = std::max(0.0, eigenvalues(0));
+    double lambda1 = std::max(0.0, eigenvalues(1));
+    double lambda2 = std::max(1e-12, eigenvalues(2));
+
     double thickness = std::sqrt(lambda0);
-    if (thickness > params_.max_thickness) {
-      continue;
-    }
-    if (normal.z() < params_.min_normal_z) {
-      continue;
-    }
-    double lambda1 = eigenvalues(1);
-    double lambda2 = eigenvalues(2);
+    if (thickness > params_.max_thickness) continue;
+    if (normal.z() < params_.min_normal_z) continue;
 
     double planarity = (lambda1 - lambda0) / lambda2;
     if (planarity < params_.min_planarity && lambda2 > 1e-4) continue;
+
     GroundPatch patch;
     patch.centroid = centroid;
     patch.normal = normal;
@@ -381,52 +373,72 @@ int GroundRegistration::FindNearestPatch(
   return best_idx;
 }
 
+Eigen::Vector3d GroundRegistration::LogSO3(const Eigen::Matrix3d& R) {
+  double cos_theta = (R.trace() - 1.0) * 0.5;
+  cos_theta = std::clamp(cos_theta, -1.0, 1.0);
+
+  double theta = std::acos(cos_theta);
+
+  if (theta < 1e-12) {
+    return Eigen::Vector3d::Zero();
+  }
+
+  Eigen::Vector3d w;
+  w << R(2, 1) - R(1, 2), R(0, 2) - R(2, 0), R(1, 0) - R(0, 1);
+
+  w *= 0.5 * theta / std::sin(theta);
+  return w;
+}
+
 GroundRegistrationResult GroundRegistration::Align(
     const std::vector<GroundPatch>& map,
-    const std::vector<GroundPatch>& current) {
+    const std::vector<GroundPatch>& current,
+    const Eigen::Matrix3d& R_imu_delta) const {
   GroundRegistrationResult result;
   if (current.empty() || map.empty()) {
     return result;
   }
+
   Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
   Eigen::Vector3d t = Eigen::Vector3d::Zero();
 
   int final_matches = 0;
-  double final_abs_residual_sum = 0;
+  double final_abs_residual_sum = 0.0;
 
   for (int iter = 0; iter < params_.max_iterations; ++iter) {
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
+
     int num_matches = 0;
     double abs_residual_sum = 0.0;
+
+    double min_x = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+
     for (const auto& cur : current) {
       Eigen::Vector3d p = R * cur.centroid + t;
       Eigen::Vector3d cur_normal = R * cur.normal;
+
       int match_idx = FindNearestPatch(p, cur_normal, map);
       if (match_idx < 0) {
         continue;
       }
 
+      min_x = std::min(min_x, p.x());
+      max_x = std::max(max_x, p.x());
+      min_y = std::min(min_y, p.y());
+      max_y = std::max(max_y, p.y());
+
       const auto& mp = map[match_idx];
       const Eigen::Vector3d& q = mp.centroid;
       const Eigen::Vector3d& n = mp.normal;
 
-      // Point-to-plane residual:
-      //
-      // r = n^T (R * p_cur + t - q)
-      //
       double r = n.dot(p - q);
-      // Full SE3 Jacobian:
-      //
-      // J = [ n^T , -n^T * [p]_x ]
-      //
-      // But we only solve:
-      //   x = [ dz, roll, pitch ]
-      //
-      // dz column:
+
       double J_dz = n.z();
 
-      // Rotation columns:
       Eigen::Matrix3d p_skew = Skew(p);
       Eigen::RowVector3d J_rot = -n.transpose() * p_skew;
 
@@ -440,10 +452,11 @@ GroundRegistrationResult GroundRegistration::Align(
       if (!std::isfinite(weight) || weight <= 0.0) {
         weight = 1.0;
       }
-      // downweight far patches
+
       double range = cur.centroid.head<2>().norm();
-      double range_weight = 1.0 / (1.0 + 0.02 * range * range);
+      double range_weight = 1.0 / (1.0 + 0.005 * range * range);
       weight *= range_weight;
+
       H += weight * J * J.transpose();
       b += weight * J * r;
 
@@ -453,35 +466,81 @@ GroundRegistrationResult GroundRegistration::Align(
 
     if (num_matches < params_.min_matches) {
       result.valid = false;
-      std::cout << "not enough matches" << std::endl;
       return result;
     }
-    H += 1e-3 * Eigen::Matrix3d::Identity();
-    Eigen::Vector3d dx = -H.ldlt().solve(b);
+
+    // IMU SO(3) prior:
+    // R should stay close to R_imu_delta.
+    // R_err = R_imu_delta^T * R
+    // log(R_err) is angular error in radians.
+    if (params_.use_imu_prior) {
+      Eigen::Matrix3d R_err = R_imu_delta.transpose() * R;
+      Eigen::Vector3d rot_err = LogSO3(R_err);
+
+      // State is [dz, roll, pitch].
+      // We constrain roll and pitch only.
+      {
+        double r_roll = rot_err.x();
+        Eigen::Vector3d J;
+        J << 0.0, 1.0, 0.0;
+
+        H += params_.imu_roll_weight * J * J.transpose();
+        b += params_.imu_roll_weight * J * r_roll;
+      }
+
+      {
+        double r_pitch = rot_err.y();
+        Eigen::Vector3d J;
+        J << 0.0, 0.0, 1.0;
+
+        H += params_.imu_pitch_weight * J * J.transpose();
+        b += params_.imu_pitch_weight * J * r_pitch;
+      }
+    }
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(H);
+    Eigen::Vector3d evals = es.eigenvalues();
+
+    double lambda_min = evals(0);
+    double lambda_max = evals(2);
+    double condition = lambda_max / std::max(lambda_min, 1e-9);
+    bool degenerate = lambda_min < 1e-4 || condition > 1e6;
+
+    Eigen::Matrix3d H_damped = H;
+    H_damped(0, 0) += params_.damping_z;
+    H_damped(1, 1) += params_.damping_roll;
+    H_damped(2, 2) += params_.damping_pitch;
+
+    Eigen::Vector3d dx = -H_damped.ldlt().solve(b);
 
     if (!dx.allFinite()) {
-      std::cout << "matrix contains infinites" << std::endl;
       result.valid = false;
       return result;
     }
-    double dz = dx(0);
-    double droll = dx(1);
-    double dpitch = dx(2);
-    if (std::abs(dz) > params_.max_dz || std::abs(droll) > params_.max_roll ||
-        std::abs(dpitch) > params_.max_pitch) {
-      std::cout << "update is too big: " << dx << std::endl;
-      result.valid = false;
-      return result;
+
+    double x_span = max_x - min_x;
+    double y_span = max_y - min_y;
+
+    if (!params_.use_imu_prior && degenerate) {
+      dx(1) = 0.0;
+      dx(2) = 0.0;
     }
-    dz = std::clamp(dz, -0.05, 0.05);
-    droll = std::clamp(droll, -0.01, 0.01);
-    dpitch = std::clamp(dpitch, -0.01, 0.01);
 
-    t.z() += dz;
+    if (x_span < params_.min_x_span_for_pitch && !params_.use_imu_prior) {
+      dx(2) = 0.0;
+    }
 
-    Eigen::Vector3d dtheta;
-    dtheta << droll, dpitch, 0.0;
+    if (y_span < params_.min_y_span_for_roll && !params_.use_imu_prior) {
+      dx(1) = 0.0;
+    }
 
+    dx(0) = std::clamp(dx(0), -params_.max_dz, params_.max_dz);
+    dx(1) = std::clamp(dx(1), -params_.max_roll, params_.max_roll);
+    dx(2) = std::clamp(dx(2), -params_.max_pitch, params_.max_pitch);
+
+    t.z() += dx(0);
+
+    Eigen::Vector3d dtheta(dx(1), dx(2), 0.0);
     R = ExpSO3(dtheta) * R;
 
     final_matches = num_matches;
@@ -491,8 +550,10 @@ GroundRegistrationResult GroundRegistration::Align(
       break;
     }
   }
+
   result.R = R;
   result.t = t;
+  result.num_matches = final_matches;
   result.mean_abs_residual =
       final_matches > 0 ? final_abs_residual_sum / final_matches : 0.0;
   result.valid = final_matches >= params_.min_matches;

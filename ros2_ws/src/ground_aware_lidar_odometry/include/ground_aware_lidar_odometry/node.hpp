@@ -1,6 +1,11 @@
 #pragma once
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_sensor_msgs/tf2_sensor_msgs.h>
+
 #include <deque>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <tuple>
 
@@ -13,6 +18,17 @@
 
 struct GALONodeParams {
   int debug = 1;
+  int max_ground_map_frames_ = 10;
+};
+
+struct ImuOrientationStamped {
+  double time = 0.0;
+  Eigen::Quaterniond q = Eigen::Quaterniond::Identity();
+};
+struct GroundPatchFrame {
+  std::vector<GroundPatch> patches;
+  Eigen::Matrix3d R_map_lidar;
+  Eigen::Vector3d t_map_lidar;
 };
 
 class GALONode : public rclcpp::Node {
@@ -20,6 +36,12 @@ class GALONode : public rclcpp::Node {
   GALONode(const GALONodeParams& node_params);
 
  private:
+  std::string imu_frame = "imu";
+  std::string lidar_frame = "rslidar";
+  FiniteDeque<ImuOrientationStamped> imu_orientation_queue_;
+  bool has_imu_lidar_extrinsic_ = false;
+  bool has_imu_prev_ = false;
+  bool has_lidar_imu_prev_ = false;
   GALONodeParams node_params_;
   DeskewParams deskew_prms_;
   GroundSegmentationParams segementation_params_;
@@ -35,18 +57,31 @@ class GALONode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr translation_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr eulers_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr imu_eulers_pub_;
-  Eigen::Quaterniond imu_q_prev_;
+  std::deque<std::vector<GroundPatch>> ground_map_frames_;
+  Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d t_map_lidar_ = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond imu_q_prev_, q_il, imu_q_lidar_prev_;
   Eigen::Matrix3d R_imu_delta;
+  Eigen::Vector3d t_il;
   DeskewAlgorithm deskew_algo_;
   Segmentation segmentation_;
   GroundPatchExtractor ground_patches_extractor_;
   GroundRegistration ground_registration_;
   std::vector<TimeMeasurments_t> time_measurments;
   std::vector<GroundPatch> ground_map_;
-
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   void LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg);
   void PrintTimeMeasurments(const std::vector<TimeMeasurments_t>& measurments);
   std::tuple<double, double, double> EulersFromMatrixSimple(
       const Eigen::Matrix3d& R);
+  bool GetExtrinsicTf(tf2_ros::Buffer& tf_buffer, const std::string& imu_frame,
+                      const std::string& lidar_frame);
+  std::optional<Eigen::Quaterniond> GetImuOrientationAt(
+      double query_time) const;
+  std::vector<GroundPatch> TransformPatchesToMap(
+      const std::vector<GroundPatch>& patches, const Eigen::Matrix3d& R,
+      const Eigen::Vector3d& t);
+  void RebuildGroundMap();
 };
