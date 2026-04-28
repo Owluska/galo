@@ -30,22 +30,24 @@ struct GroundSegmentationParams {
   double cell_size = 1.0;
   double min_range = 2.0;
   double max_range = 80.0;
-  double ground_height_threshold = 0.15;
+  double ground_height_threshold = 0.20;
   int min_points_per_cell = 5;
 };
 struct GroundPatchParams {
   double cell_size = 2.5;
   int min_points = 15;
-  double max_thickness = 0.15;
+  double max_thickness = 0.20;
   double min_normal_z = 0.85;  // ~30° slope
   double min_planarity = 0.05;
 };
 struct GroundRegistrationParams {
-  double max_match_distance = 3.0;
-  double min_normal_dot = 0.85;
+  double max_match_distance = 1.0;
+  double min_normal_dot = 0.95;
   int max_iterations = 5;
   int min_matches = 5;
-  double max_update_norm = 1.0;
+  double max_dz = 0.1;     // meters
+  double max_roll = 0.02;  // ~1°
+  double max_pitch = 0.02;
 };
 
 struct GridCell {
@@ -127,8 +129,8 @@ class GroundRegistration {
  public:
   explicit GroundRegistration(const GroundRegistrationParams& params)
       : params_(params) {}
-  GroundRegistrationResult Align(const std::vector<GroundPatch>& current,
-                                 const std::vector<GroundPatch>& map);
+  GroundRegistrationResult Align(const std::vector<GroundPatch>& map,
+                                 const std::vector<GroundPatch>& current);
 
  private:
   GroundRegistrationParams params_;

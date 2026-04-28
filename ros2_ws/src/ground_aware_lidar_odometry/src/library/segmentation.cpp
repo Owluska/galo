@@ -367,11 +367,10 @@ int GroundRegistration::FindNearestPatch(
   for (size_t i = 0; i < map.size(); ++i) {
     const auto& m = map[i];
 
-    double normal_dot = normal.dot(m.normal);
+    double normal_dot = normal.normalized().dot(m.normal.normalized());
     if (normal_dot < params_.min_normal_dot) {
       continue;
     }
-
     double dist2 = (p - m.centroid).squaredNorm();
     if (dist2 < best_dist2) {
       best_dist2 = dist2;
@@ -402,8 +401,7 @@ GroundRegistrationResult GroundRegistration::Align(
     double abs_residual_sum = 0.0;
     for (const auto& cur : current) {
       Eigen::Vector3d p = R * cur.centroid + t;
-      Eigen::Vector3d cur_normal = R * cur_normal;
-
+      Eigen::Vector3d cur_normal = R * cur.normal;
       int match_idx = FindNearestPatch(p, cur_normal, map);
       if (match_idx < 0) {
         continue;
@@ -442,7 +440,10 @@ GroundRegistrationResult GroundRegistration::Align(
       if (!std::isfinite(weight) || weight <= 0.0) {
         weight = 1.0;
       }
-
+      // downweight far patches
+      double range = cur.centroid.head<2>().norm();
+      double range_weight = 1.0 / (1.0 + 0.02 * range * range);
+      weight *= range_weight;
       H += weight * J * J.transpose();
       b += weight * J * r;
 
@@ -452,24 +453,29 @@ GroundRegistrationResult GroundRegistration::Align(
 
     if (num_matches < params_.min_matches) {
       result.valid = false;
+      std::cout << "not enough matches" << std::endl;
       return result;
     }
-
+    H += 1e-3 * Eigen::Matrix3d::Identity();
     Eigen::Vector3d dx = -H.ldlt().solve(b);
 
     if (!dx.allFinite()) {
+      std::cout << "matrix contains infinites" << std::endl;
       result.valid = false;
       return result;
     }
-
-    if (dx.norm() > params_.max_update_norm) {
-      result.valid = false;
-      return result;
-    }
-
     double dz = dx(0);
     double droll = dx(1);
     double dpitch = dx(2);
+    if (std::abs(dz) > params_.max_dz || std::abs(droll) > params_.max_roll ||
+        std::abs(dpitch) > params_.max_pitch) {
+      std::cout << "update is too big: " << dx << std::endl;
+      result.valid = false;
+      return result;
+    }
+    dz = std::clamp(dz, -0.05, 0.05);
+    droll = std::clamp(droll, -0.01, 0.01);
+    dpitch = std::clamp(dpitch, -0.01, 0.01);
 
     t.z() += dz;
 

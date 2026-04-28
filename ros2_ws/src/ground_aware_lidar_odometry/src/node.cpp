@@ -28,6 +28,8 @@ GALONode::GALONode(const GALONodeParams& node_params)
       this->create_publisher<geometry_msgs::msg::Point>("/GALO/translation", 1);
   eulers_pub_ =
       this->create_publisher<geometry_msgs::msg::Point>("/GALO/eulers", 1);
+  imu_eulers_pub_ =
+      this->create_publisher<geometry_msgs::msg::Point>("/GALO/imu_eulers", 1);
 }
 
 void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -67,10 +69,9 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   if (!ground_map_.empty()) {
     TimeMeasurments_t registration_meas("ground_registration");
     auto reg_result = ground_registration_.Align(cur_patches, ground_map_);
+    registration_meas.SetEnd();
     time_measurments.push_back(registration_meas);
     if (reg_result.valid) {
-      // reg_result.R and reg_result.t contain ground alignment correction
-      // mostly roll, pitch, z
       geometry_msgs::msg::Point translation_msg;
       translation_msg.x = reg_result.t.x();
       translation_msg.y = reg_result.t.y();
@@ -78,11 +79,20 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
       translation_pub_->publish(translation_msg);
 
       geometry_msgs::msg::Point eulers_msg;
-      auto eulers = reg_result.R.eulerAngles(0, 1, 2);
-      eulers_msg.x = eulers.x();
-      eulers_msg.x = eulers.y();
-      eulers_msg.x = eulers.z();
+      auto [roll, pitch, yaw] = EulersFromMatrixSimple(reg_result.R);
+      eulers_msg.x = roll;
+      eulers_msg.y = pitch;
+      eulers_msg.z = yaw;
       eulers_pub_->publish(eulers_msg);
+      {
+        std::lock_guard<std::mutex> lock(mut_);
+        geometry_msgs::msg::Point eulers_imu_msg;
+        auto [imu_r, imu_p, imu_y] = EulersFromMatrixSimple(R_imu_delta);
+        eulers_imu_msg.x = imu_r;
+        eulers_imu_msg.y = imu_p;
+        eulers_imu_msg.z = imu_y;
+        imu_eulers_pub_->publish(eulers_imu_msg);
+      }
     }
   }
   ground_map_ = cur_patches;
@@ -90,11 +100,17 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
 }
 
 void GALONode::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
+  auto imu_q_curr_ = Eigen::Quaterniond(msg->orientation.w, msg->orientation.x,
+                                        msg->orientation.y, msg->orientation.z);
+
   rclcpp::Time msg_time(msg->header.stamp);
   {
     std::lock_guard<std::mutex> lock(mut_);
+    R_imu_delta = imu_q_prev_.toRotationMatrix().transpose() *
+                  imu_q_curr_.toRotationMatrix();
     deskew_algo_.UpdateImuQueue(msg->angular_velocity.z, msg_time.seconds());
   }
+  imu_q_prev_ = imu_q_curr_;
 }
 
 void GALONode::PrintTimeMeasurments(
@@ -113,6 +129,15 @@ void GALONode::PrintTimeMeasurments(
   }
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "%s",
                        ss.str().c_str());
+}
+
+std::tuple<double, double, double> GALONode::EulersFromMatrixSimple(
+    const Eigen::Matrix3d& R) {
+  double roll = std::atan2(R(2, 1), R(2, 2));
+  double pitch =
+      std::atan2(-R(2, 0), std::sqrt(R(2, 1) * R(2, 1) + R(2, 2) * R(2, 2)));
+  double yaw = std::atan2(R(1, 0), R(0, 0));
+  return std::make_tuple(roll, pitch, yaw);
 }
 
 int main(int argc, char* argv[]) {

@@ -2,6 +2,7 @@
 #include <deque>
 #include <memory>
 #include <thread>
+#include <tuple>
 
 #include "geometry_msgs/msg/point.hpp"
 #include "ground_aware_lidar_odometry/deskew.hpp"
@@ -33,7 +34,9 @@ class GALONode : public rclcpp::Node {
       ground_patches_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr translation_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr eulers_pub_;
-
+  rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr imu_eulers_pub_;
+  Eigen::Quaterniond imu_q_prev_;
+  Eigen::Matrix3d R_imu_delta;
   DeskewAlgorithm deskew_algo_;
   Segmentation segmentation_;
   GroundPatchExtractor ground_patches_extractor_;
@@ -44,4 +47,6 @@ class GALONode : public rclcpp::Node {
   void LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg);
   void PrintTimeMeasurments(const std::vector<TimeMeasurments_t>& measurments);
+  std::tuple<double, double, double> EulersFromMatrixSimple(
+      const Eigen::Matrix3d& R);
 };
