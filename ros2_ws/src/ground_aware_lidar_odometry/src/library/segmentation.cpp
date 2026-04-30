@@ -396,6 +396,10 @@ GroundRegistrationResult GroundRegistration::Align(
     const Eigen::Matrix3d& R_imu_delta) const {
   GroundRegistrationResult result;
   if (current.empty() || map.empty()) {
+    RCLCPP_WARN(logger_,
+                "GroundRegistration::Align: either map or current patches are "
+                "empty: %d, %d",
+                current.size(), map.size());
     return result;
   }
 
@@ -465,6 +469,9 @@ GroundRegistrationResult GroundRegistration::Align(
     }
 
     if (num_matches < params_.min_matches) {
+      RCLCPP_WARN(logger_,
+                  "GroundRegistration::Align: low amount of matches %d %d",
+                  num_matches, params_.min_matches);
       result.valid = false;
       return result;
     }
@@ -515,6 +522,7 @@ GroundRegistrationResult GroundRegistration::Align(
 
     if (!dx.allFinite()) {
       result.valid = false;
+      RCLCPP_WARN(logger_, "GroundRegistration::Align: dx has infinite values");
       return result;
     }
 
@@ -550,6 +558,10 @@ GroundRegistrationResult GroundRegistration::Align(
       break;
     }
   }
+  RCLCPP_WARN_EXPRESSION(
+      logger_, final_matches < params_.min_matches,
+      "GroundRegistration::Align: low amount of final matches %d %d",
+      final_matches, params_.min_matches);
 
   result.R = R;
   result.t = t;
@@ -557,5 +569,155 @@ GroundRegistrationResult GroundRegistration::Align(
   result.mean_abs_residual =
       final_matches > 0 ? final_abs_residual_sum / final_matches : 0.0;
   result.valid = final_matches >= params_.min_matches;
+  return result;
+}
+
+std::vector<Eigen::Vector2d> PlanarRegistration::ExtractPoints(
+    const CloudMsg& cloud, const std::vector<PointLabels>& labels) const {
+  std::vector<Eigen::Vector2d> points;
+  size_t n = static_cast<size_t>(cloud.width);
+  n *= static_cast<size_t>(cloud.height);
+  if (n == 0 || labels.size() != n) return points;
+  points.reserve(n);
+  sensor_msgs::PointCloud2ConstIterator<float> x_it(cloud, "x");
+  sensor_msgs::PointCloud2ConstIterator<float> y_it(cloud, "y");
+
+  for (size_t idx = 0; idx < n; ++x_it, ++y_it, ++idx) {
+    float x = *x_it;
+    float y = *y_it;
+    if (!IsFinitePoint(x, y)) continue;
+    if (labels[idx] == PointLabels::NON_GROUND) {
+      points.emplace_back(Eigen::Vector2d(x, y));
+    }
+  }
+  return points;
+}
+
+std::vector<Eigen::Vector2d> PlanarRegistration::Filter(
+    const std::vector<Eigen::Vector2d>& inp) const {
+  std::unordered_map<CellKey, Voxel2D, CellKeyHash> grid_;
+  grid_.reserve(50000);
+
+  for (const auto& pt : inp) {
+    int ix = std::floor(pt.x() / params_.voxel_size);
+    int iy = std::floor(pt.y() / params_.voxel_size);
+    auto& v = grid_[{ix, iy}];
+    v.count++;
+    v.sum += pt;
+  }
+
+  std::vector<Eigen::Vector2d> outp;
+  outp.reserve(grid_.size());
+
+  for (const auto& [key, v] : grid_) {
+    if (v.count < params_.min_points_per_voxel) continue;
+    outp.push_back(v.sum / v.count);
+  }
+  return outp;
+}
+
+PlanarRegistrationResult PlanarRegistration::Align(
+    const std::vector<Eigen::Vector2d>& map,
+    const std::vector<Eigen::Vector2d>& current) {
+  PlanarRegistrationResult result;
+
+  if (map.empty() || current.empty()) {
+    RCLCPP_WARN(logger_,
+                "PlanarRegistration::Align: either map or current patches are "
+                "empty: %d, %d",
+                current.size(), map.size());
+    return result;
+  }
+  Eigen::Matrix2d R = Eigen::Matrix2d::Identity();
+  Eigen::Vector2d t = Eigen::Vector2d::Zero();
+  int final_matches = 0;
+  double final_residual_sum = 0;
+  for (int iter = 0; iter < params_.max_iterations; iter++) {
+    Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+    Eigen::Vector3d b = Eigen::Vector3d::Zero();
+
+    int num_matches = 0;
+    double residual_sum = 0;
+    for (const auto& cur_pt : current) {
+      Eigen::Vector2d p = R * cur_pt + t;
+      double best_dist2 =
+          params_.max_match_distance * params_.max_match_distance;
+      bool found_match = false;
+      Eigen::Vector2d matched_pt = Eigen::Vector2d::Zero();
+      for (const auto& prev_pt : map) {
+        Eigen::Vector2d matched_pt = Eigen::Vector2d::Zero();
+        double dist2 = (cur_pt - prev_pt).squaredNorm();
+        if (dist2 < best_dist2) {
+          best_dist2 = dist2;
+          matched_pt = prev_pt;
+          found_match = true;
+        }
+      }
+      if (!found_match) continue;
+      Eigen::Vector2d r = p - matched_pt;
+      Eigen::Matrix<double, 2, 3> J;
+      // clang-format off
+      J << 1.0, 0.0, -p.y(), 
+           0.0, 1.0,  p.x();
+      // clang-format on
+      double weight = 1.0;
+      H += weight * J.transpose() * J;
+      b += weight * J.transpose() * r;
+      ++num_matches;
+      residual_sum += r.norm();
+    }
+    if (num_matches < params_.min_matches) {
+      result.valid = false;
+      return result;
+    }
+
+    H += params_.damping * Eigen::Matrix3d::Identity();
+
+    Eigen::Vector3d dx = -H.ldlt().solve(b);
+    if (!dx.allFinite()) {
+      result.valid = false;
+      return result;
+    }
+
+    if (std::abs(dx.x()) > params_.max_dx ||
+        std::abs(dx.y()) > params_.max_dy ||
+        std::abs(dx.z()) > params_.max_dyaw) {
+      result.valid = false;
+      return result;
+    }
+
+    dx.x() = std::clamp(dx.x(), -params_.max_dx_step, params_.max_dx_step);
+    dx.y() = std::clamp(dx.y(), -params_.max_dy_step, params_.max_dy_step);
+    dx.z() = std::clamp(dx.z(), -params_.max_dyaw_step, params_.max_dyaw_step);
+
+    const double dtheta = dx.z();
+    const double c = std::cos(dtheta);
+    const double s = std::sin(dtheta);
+
+    Eigen::Matrix2d dR;
+    // clang-format off
+    dR << c, -s, 
+          s,  c;
+    // clang-format on
+
+    Eigen::Vector2d dt(dx.x(), dx.y());
+
+    R = dR * R;
+    t = dR * t + dt;
+
+    final_matches = num_matches;
+    final_residual_sum = residual_sum;
+
+    if (dx.norm() < params_.convergence_eps) {
+      break;
+    }
+  }
+  result.R = R;
+  result.t = t;
+  result.mean_residual =
+      final_matches > 0 ? final_residual_sum / final_matches : 0.0;
+  result.matches = final_matches;
+  result.valid = final_matches >= params_.min_matches;
+
   return result;
 }

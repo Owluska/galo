@@ -7,7 +7,10 @@ GALONode::GALONode(const GALONodeParams& node_params)
       node_params_(node_params),
       segmentation_(segementation_params_),
       ground_patches_extractor_(ground_patch_params_),
-      ground_registration_(ground_registration_params_),
+      ground_registration_(ground_registration_params_, this->get_logger(),
+                           *this->get_clock()),
+      planar_registration_(planar_registration_params_, this->get_logger(),
+                           *this->get_clock()),
       deskew_algo_(deskew_prms_, this->get_logger(), *this->get_clock()) {
   imu_orientation_queue_.Resize(2000);
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
@@ -54,8 +57,8 @@ bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
     has_imu_lidar_extrinsic_ = true;
     return true;
   } catch (const tf2::TransformException& ex) {
-    RCLCPP_WARN(this->get_logger(), "Failed to get TF %s <- %s: %s", imu_frame,
-                lidar_frame, ex.what());
+    RCLCPP_WARN(this->get_logger(), "Failed to get TF %s <- %s: %s",
+                imu_frame.c_str(), lidar_frame.c_str(), ex.what());
     return false;
   }
 }
@@ -89,7 +92,14 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     auto colored_cld = segmentation_.MakeColoredCloud(segmentation_result);
     colored_pub_->publish(colored_cld);
   }
-
+  TimeMeasurments_t objects_extraction_meas("objects_extration");
+  auto cur_planar_points =
+      planar_registration_.ExtractPoints(*deskewed, segmentation_result.labels);
+  if (cur_planar_points.size()) {
+    cur_planar_points = planar_registration_.Filter(cur_planar_points);
+  }
+  objects_extraction_meas.SetEnd();
+  time_measurments.push_back(objects_extraction_meas);
   TimeMeasurments_t extraction_meas("ground_extration");
   std::vector<GroundPatch> cur_patches =
       ground_patches_extractor_.Extract(*deskewed, segmentation_result.labels);
@@ -101,11 +111,12 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
         ground_patches_extractor_.MakeGroundPatchMarkers(deskewed->header);
     ground_patches_pub_->publish(patches_marker);
   }
-  if (ground_map_.empty()) {
+  if (ground_map_.empty() || objects_map_.empty()) {
     auto patches_in_map = TransformPatchesToMap(
         cur_patches, Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
     ground_map_frames_.push_back(patches_in_map);
     RebuildGroundMap();
+    objects_map_ = std::move(cur_planar_points);
     PrintTimeMeasurments(time_measurments);
     return;
   }
@@ -137,15 +148,34 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     Eigen::Matrix3d R_ex = q_il.toRotationMatrix();
     Eigen::Matrix3d R_lidar_delta = R_ex.transpose() * R_imu_delta_lidar * R_ex;
     imu_q_lidar_prev_ = *q_lidar;
-    TimeMeasurments_t registration_meas("ground_registration");
-    auto reg_result =
-        ground_registration_.Align(ground_map_, cur_patches, R_lidar_delta);
-    registration_meas.SetEnd();
-    time_measurments.push_back(registration_meas);
-    if (reg_result.valid) {
-      // compose global local-map pose
-      R_map_lidar_ = reg_result.R * R_map_lidar_;
-      t_map_lidar_ = reg_result.R * t_map_lidar_ + reg_result.t;
+    GroundRegistrationResult ground_reg_result;
+    {
+      TimeMeasurments_t meas("ground_registration");
+      ground_reg_result =
+          ground_registration_.Align(ground_map_, cur_patches, R_lidar_delta);
+      meas.SetEnd();
+      time_measurments.push_back(meas);
+    }
+    PlanarRegistrationResult planar_reg_res;
+    {
+      TimeMeasurments_t meas("planar_registration");
+      planar_reg_res =
+          planar_registration_.Align(objects_map_, cur_planar_points);
+      objects_map_ = std::move(cur_planar_points);
+      meas.SetEnd();
+      time_measurments.push_back(meas);
+    }
+
+    if (ground_reg_result.valid && planar_reg_res.valid) {
+      Eigen::Matrix3d R_delta =
+          MergeGroundAndPlanarRotation(ground_reg_result.R, planar_reg_res.R);
+
+      Eigen::Vector3d t_delta = MergeGroundAndPlanarTranslation(
+          ground_reg_result.t, planar_reg_res.t);
+
+      // Update global pose
+      R_map_lidar_ = R_delta * R_map_lidar_;
+      t_map_lidar_ = R_delta * t_map_lidar_ + t_delta;
       auto patches_in_map =
           TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar_);
 
@@ -154,17 +184,16 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
       while (ground_map_frames_.size() > node_params_.max_ground_map_frames_) {
         ground_map_frames_.pop_front();
       }
-
       RebuildGroundMap();
       if (node_params_.debug) {
         geometry_msgs::msg::Point translation_msg;
-        translation_msg.x = reg_result.t.x();
-        translation_msg.y = reg_result.t.y();
-        translation_msg.z = reg_result.t.z();
+        translation_msg.x = t_delta.x();
+        translation_msg.y = t_delta.y();
+        translation_msg.z = t_delta.z();
         translation_pub_->publish(translation_msg);
 
         geometry_msgs::msg::Point eulers_msg;
-        auto [roll, pitch, yaw] = EulersFromMatrixSimple(reg_result.R);
+        auto [roll, pitch, yaw] = EulersFromMatrixSimple(R_delta);
         eulers_msg.x = roll;
         eulers_msg.y = pitch;
         eulers_msg.z = yaw;
@@ -286,6 +315,27 @@ void GALONode::RebuildGroundMap() {
   for (const auto& frame : ground_map_frames_) {
     ground_map_.insert(ground_map_.end(), frame.begin(), frame.end());
   }
+}
+
+Eigen::Matrix3d GALONode::MergeGroundAndPlanarRotation(
+    const Eigen::Matrix3d& R_ground, const Eigen::Matrix2d& R_planar) {
+  // Extract planar yaw from 2D rotation
+  double yaw = std::atan2(R_planar(1, 0), R_planar(0, 0));
+
+  Eigen::AngleAxisd yaw_rot(yaw, Eigen::Vector3d::UnitZ());
+
+  // Ground registration already contains roll/pitch correction.
+  // Planar registration contributes yaw.
+  return yaw_rot.toRotationMatrix() * R_ground;
+}
+
+Eigen::Vector3d GALONode::MergeGroundAndPlanarTranslation(
+    const Eigen::Vector3d& t_ground, const Eigen::Vector2d& t_planar) {
+  Eigen::Vector3d t;
+  t.x() = t_planar.x();
+  t.y() = t_planar.y();
+  t.z() = t_ground.z();
+  return t;
 }
 
 int main(int argc, char* argv[]) {

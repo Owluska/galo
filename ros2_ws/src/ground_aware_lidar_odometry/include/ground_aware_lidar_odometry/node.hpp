@@ -47,6 +47,7 @@ class GALONode : public rclcpp::Node {
   GroundSegmentationParams segementation_params_;
   GroundPatchParams ground_patch_params_;
   GroundRegistrationParams ground_registration_params_;
+  PlanarRegistrationParams planar_registration_params_;
   std::mutex mut_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
@@ -67,8 +68,10 @@ class GALONode : public rclcpp::Node {
   Segmentation segmentation_;
   GroundPatchExtractor ground_patches_extractor_;
   GroundRegistration ground_registration_;
+  PlanarRegistration planar_registration_;
   std::vector<TimeMeasurments_t> time_measurments;
   std::vector<GroundPatch> ground_map_;
+  std::vector<Eigen::Vector2d> objects_map_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   void LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
@@ -84,4 +87,9 @@ class GALONode : public rclcpp::Node {
       const std::vector<GroundPatch>& patches, const Eigen::Matrix3d& R,
       const Eigen::Vector3d& t);
   void RebuildGroundMap();
+  Eigen::Vector3d MergeGroundAndPlanarTranslation(
+      const Eigen::Vector3d& t_ground, const Eigen::Vector2d& t_planar);
+
+  Eigen::Matrix3d MergeGroundAndPlanarRotation(const Eigen::Matrix3d& R_ground,
+                                               const Eigen::Matrix2d& R_planar);
 };

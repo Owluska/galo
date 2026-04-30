@@ -41,10 +41,10 @@ struct GroundPatchParams {
   double min_planarity = 0.05;
 };
 struct GroundRegistrationParams {
-  double max_match_distance = 1.0;
-  double min_normal_dot = 0.95;
+  double max_match_distance = 5.0;
+  double min_normal_dot = 0.85;
   int max_iterations = 5;
-  int min_matches = 5;
+  int min_matches = 2;
   double max_dz = 0.1;     // meters
   double max_roll = 0.02;  // ~1°
   double max_pitch = 0.02;
@@ -56,6 +56,26 @@ struct GroundRegistrationParams {
   double imu_roll_weight = 100.0;
   double imu_pitch_weight = 100.0;
   bool use_imu_prior = true;
+  int log_throttle = 2000;  // ms
+};
+
+struct PlanarRegistrationParams {
+  double voxel_size = 0.5;  // m
+  double max_match_distance = 1.0;
+  int min_points_per_voxel = 3;
+  int max_iterations = 10;
+  int min_matches = 20;
+  double damping = 1e-4;
+
+  double max_dx = 1.0;
+  double max_dy = 1.0;
+  double max_dyaw = 0.2;
+
+  double max_dx_step = 0.2;
+  double max_dy_step = 0.2;
+  double max_dyaw_step = 0.05;
+
+  double convergence_eps = 1e-5;
 };
 
 struct GridCell {
@@ -88,6 +108,15 @@ struct GroundRegistrationResult {
   bool valid = false;
 };
 
+struct PlanarRegistrationResult {
+  Eigen::Matrix2d R = Eigen::Matrix2d::Identity();
+  Eigen::Vector2d t = Eigen::Vector2d::Zero();
+  int matches = 0;
+  double mean_residual = 0.0;
+  bool valid = false;
+  ;
+};
+
 struct GroundPatch {
   Eigen::Vector3d centroid;
   Eigen::Vector3d normal;
@@ -96,6 +125,11 @@ struct GroundPatch {
   double weight = 1.0;
   int support = 0;
   CellKey key;
+};
+
+struct Voxel2D {
+  int count = 0;
+  Eigen::Vector2d sum = Eigen::Vector2d::Zero();
 };
 
 class Segmentation {
@@ -143,15 +177,18 @@ class GroundPatchExtractor {
 
 class GroundRegistration {
  public:
-  explicit GroundRegistration(const GroundRegistrationParams& params)
-      : params_(params) {}
+  explicit GroundRegistration(const GroundRegistrationParams& params,
+                              const rclcpp::Logger& logger,
+                              const rclcpp::Clock& clock)
+      : params_(params), logger_(logger), clock_(clock) {}
   GroundRegistrationResult Align(const std::vector<GroundPatch>& map,
                                  const std::vector<GroundPatch>& current,
                                  const Eigen::Matrix3d& R_imu_delta) const;
 
  private:
   GroundRegistrationParams params_;
-
+  rclcpp::Logger logger_;
+  rclcpp::Clock clock_;
   static Eigen::Matrix3d Skew(const Eigen::Vector3d& v);
 
   static Eigen::Matrix3d ExpSO3(const Eigen::Vector3d& w);
@@ -159,4 +196,24 @@ class GroundRegistration {
   static Eigen::Vector3d LogSO3(const Eigen::Matrix3d& R);
   int FindNearestPatch(const Eigen::Vector3d& p, const Eigen::Vector3d& normal,
                        const std::vector<GroundPatch>& map) const;
+};
+
+class PlanarRegistration {
+ public:
+  PlanarRegistration(const PlanarRegistrationParams params,
+                     const rclcpp::Logger& logger, const rclcpp::Clock& clock)
+      : params_(params), logger_(logger), clock_(clock) {}
+
+  PlanarRegistrationResult Align(const std::vector<Eigen::Vector2d>& map,
+                                 const std::vector<Eigen::Vector2d>& current);
+  std::vector<Eigen::Vector2d> ExtractPoints(
+      const CloudMsg& cloud, const std::vector<PointLabels>& labels) const;
+
+  std::vector<Eigen::Vector2d> Filter(
+      const std::vector<Eigen::Vector2d>& inp) const;
+
+ private:
+  PlanarRegistrationParams params_;
+  rclcpp::Logger logger_;
+  rclcpp::Clock clock_;
 };
