@@ -112,11 +112,19 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     ground_patches_pub_->publish(patches_marker);
   }
   if (ground_map_.empty() || objects_map_.empty()) {
+    RCLCPP_WARN(this->get_logger(),
+                "Either objects or ground map is empty %zu %zu",
+                ground_map_.size(), objects_map_.size());
     auto patches_in_map = TransformPatchesToMap(
         cur_patches, Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
     ground_map_frames_.push_back(patches_in_map);
     RebuildGroundMap();
-    objects_map_ = std::move(cur_planar_points);
+
+    auto planar_points_in_map =
+        TransformPointsToMap(cur_planar_points, Eigen::Matrix3d::Identity(),
+                             Eigen::Vector3d::Zero());
+    objects_map_frames_.push_back(planar_points_in_map);
+    RebuildObjectsMap();
     PrintTimeMeasurments(time_measurments);
     return;
   }
@@ -148,34 +156,122 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     Eigen::Matrix3d R_ex = q_il.toRotationMatrix();
     Eigen::Matrix3d R_lidar_delta = R_ex.transpose() * R_imu_delta_lidar * R_ex;
     imu_q_lidar_prev_ = *q_lidar;
+
+    // Predicted absolute map rotation from previous pose + IMU delta
+    Eigen::Matrix3d R_imu_prior_map = R_map_lidar_ * R_lidar_delta;
+
+    // Planar initial guess from current global pose
+    double yaw_initial = std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0));
+    double c = std::cos(yaw_initial);
+    double s = std::sin(yaw_initial);
+
+    Eigen::Matrix2d R_planar_initial;
+    R_planar_initial << c, -s, s, c;
+
+    Eigen::Vector2d t_planar_initial(t_map_lidar_.x(), t_map_lidar_.y());
+
+    PlanarRegistrationResult planar_reg_res;
+    {
+      TimeMeasurments_t meas("planar_registration");
+      planar_reg_res = planar_registration_.Align(
+          objects_map_, cur_planar_points, R_planar_initial, t_planar_initial);
+      meas.SetEnd();
+      time_measurments.push_back(meas);
+    }
     GroundRegistrationResult ground_reg_result;
     {
       TimeMeasurments_t meas("ground_registration");
       ground_reg_result =
-          ground_registration_.Align(ground_map_, cur_patches, R_lidar_delta);
+          ground_registration_.Align(ground_map_, cur_patches, R_imu_prior_map,
+                                     R_map_lidar_, t_map_lidar_);
       meas.SetEnd();
       time_measurments.push_back(meas);
     }
-    PlanarRegistrationResult planar_reg_res;
-    {
-      TimeMeasurments_t meas("planar_registration");
-      planar_reg_res =
-          planar_registration_.Align(objects_map_, cur_planar_points);
-      objects_map_ = std::move(cur_planar_points);
-      meas.SetEnd();
-      time_measurments.push_back(meas);
-    }
-
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+    //                      "Reg debug | "
+    //                      "ground: valid=%d matches=%d mean_abs_res=%.4f | "
+    //                      "planar: valid=%d matches=%d mean_res=%.4f | "
+    //                      "map sizes: ground=%zu objects=%zu | "
+    //                      "cur sizes: ground=%zu objects=%zu",
+    //                      ground_reg_result.valid,
+    //                      ground_reg_result.num_matches,
+    //                      ground_reg_result.mean_abs_residual,
+    //                      planar_reg_res.valid, planar_reg_res.matches,
+    //                      planar_reg_res.mean_residual, ground_map_.size(),
+    //                      objects_map_.size(), cur_patches.size(),
+    //                      cur_planar_points.size());
     if (ground_reg_result.valid && planar_reg_res.valid) {
-      Eigen::Matrix3d R_delta =
+      Eigen::Matrix3d R_map_lidar_prev = R_map_lidar_;
+      Eigen::Vector3d t_map_lidar_prev = t_map_lidar_;
+
+      Eigen::Matrix3d R_abs =
           MergeGroundAndPlanarRotation(ground_reg_result.R, planar_reg_res.R);
 
-      Eigen::Vector3d t_delta = MergeGroundAndPlanarTranslation(
+      Eigen::Vector3d t_abs = MergeGroundAndPlanarTranslation(
           ground_reg_result.t, planar_reg_res.t);
+      auto [roll_abs, pitch_abs, yaw_abs] = EulersFromMatrixSimple(R_abs);
+      auto [roll_ground, pitch_ground, yaw_ground] =
+          EulersFromMatrixSimple(ground_reg_result.R);
 
-      // Update global pose
-      R_map_lidar_ = R_delta * R_map_lidar_;
-      t_map_lidar_ = R_delta * t_map_lidar_ + t_delta;
+      double planar_yaw =
+          std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
+
+      // RCLCPP_INFO_THROTTLE(
+      //     this->get_logger(), *this->get_clock(), 500,
+      //     "Pose debug | "
+      //     "ground_rpy=[%.5f %.5f %.5f] planar_yaw=%.5f | "
+      //     "abs_rpy=[%.5f %.5f %.5f] | "
+      //     "ground_t=[%.3f %.3f %.3f] planar_t=[%.3f %.3f] abs_t=[%.3f %.3f "
+      //     "%.3f]",
+      //     roll_ground, pitch_ground, yaw_ground, planar_yaw, roll_abs,
+      //     pitch_abs, yaw_abs, ground_reg_result.t.x(),
+      //     ground_reg_result.t.y(), ground_reg_result.t.z(),
+      //     planar_reg_res.t.x(), planar_reg_res.t.y(), t_abs.x(), t_abs.y(),
+      //     t_abs.z());
+      Eigen::Matrix3d R_debug_delta = R_abs * R_map_lidar_prev.transpose();
+      Eigen::Vector3d t_debug_delta = t_abs - R_debug_delta * t_map_lidar_prev;
+      if (node_params_.debug) {
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(), *this->get_clock(), 500,
+            "GALO pose | t=[%.3f %.3f %.3f] | delta=[%.3f %.3f %.3f] | "
+            "dist_xy=%.3f dz=%.3f",
+            t_map_lidar_.x(), t_map_lidar_.y(), t_map_lidar_.z(),
+            t_debug_delta.x(), t_debug_delta.y(), t_debug_delta.z(),
+            std::hypot(t_map_lidar_.x(), t_map_lidar_.y()), t_map_lidar_.z());
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(), *this->get_clock(), 500,
+            "Ground result | valid=%d matches=%d mean_abs_res=%.4f "
+            "t_ground=[%.3f %.3f %.3f] rpy_ground=[%.5f %.5f %.5f]",
+            ground_reg_result.valid, ground_reg_result.num_matches,
+            ground_reg_result.mean_abs_residual, ground_reg_result.t.x(),
+            ground_reg_result.t.y(), ground_reg_result.t.z(), roll_ground,
+            pitch_ground, yaw_ground);
+        geometry_msgs::msg::Point translation_msg;
+        translation_msg.x = t_debug_delta.x();
+        translation_msg.y = t_debug_delta.y();
+        translation_msg.z = t_debug_delta.z();
+        translation_pub_->publish(translation_msg);
+
+        geometry_msgs::msg::Point eulers_msg;
+        auto [roll, pitch, yaw] = EulersFromMatrixSimple(R_debug_delta);
+        eulers_msg.x = roll;
+        eulers_msg.y = pitch;
+        eulers_msg.z = yaw;
+        eulers_pub_->publish(eulers_msg);
+
+        geometry_msgs::msg::Point eulers_imu_msg;
+        auto [imu_r, imu_p, imu_y] = EulersFromMatrixSimple(R_lidar_delta);
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                             "IMU delta | rpy=[%.5f %.5f %.5f]", imu_r, imu_p,
+                             imu_y);
+        eulers_imu_msg.x = imu_r;
+        eulers_imu_msg.y = imu_p;
+        eulers_imu_msg.z = imu_y;
+        imu_eulers_pub_->publish(eulers_imu_msg);
+      }
+      R_map_lidar_ = R_abs;
+      t_map_lidar_ = t_abs;
+
       auto patches_in_map =
           TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar_);
 
@@ -184,29 +280,18 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
       while (ground_map_frames_.size() > node_params_.max_ground_map_frames_) {
         ground_map_frames_.pop_front();
       }
-      RebuildGroundMap();
-      if (node_params_.debug) {
-        geometry_msgs::msg::Point translation_msg;
-        translation_msg.x = t_delta.x();
-        translation_msg.y = t_delta.y();
-        translation_msg.z = t_delta.z();
-        translation_pub_->publish(translation_msg);
 
-        geometry_msgs::msg::Point eulers_msg;
-        auto [roll, pitch, yaw] = EulersFromMatrixSimple(R_delta);
-        eulers_msg.x = roll;
-        eulers_msg.y = pitch;
-        eulers_msg.z = yaw;
-        eulers_pub_->publish(eulers_msg);
+      auto planar_points_in_map =
+          TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar_);
 
-        geometry_msgs::msg::Point eulers_imu_msg;
-        auto [imu_r, imu_p, imu_y] = EulersFromMatrixSimple(R_lidar_delta);
-        eulers_imu_msg.x = imu_r;
-        eulers_imu_msg.y = imu_p;
-        eulers_imu_msg.z = imu_y;
-        imu_eulers_pub_->publish(eulers_imu_msg);
-        // std::cout << pitch << ":" << imu_p << std::endl;
+      objects_map_frames_.push_back(planar_points_in_map);
+
+      while (objects_map_frames_.size() > node_params_.max_planar_map_frames_) {
+        objects_map_frames_.pop_front();
       }
+
+      RebuildGroundMap();
+      RebuildObjectsMap();
     }
   }
   PrintTimeMeasurments(time_measurments);
@@ -305,7 +390,27 @@ std::vector<GroundPatch> GALONode::TransformPatchesToMap(
     p.normal.normalize();
     out.push_back(p);
   }
+  return out;
+}
 
+std::vector<Eigen::Vector2d> GALONode::TransformPointsToMap(
+    const std::vector<Eigen::Vector2d>& points, const Eigen::Matrix3d& R,
+    const Eigen::Vector3d& t) {
+  std::vector<Eigen::Vector2d> out;
+  out.reserve(points.size());
+  const double yaw = std::atan2(R(1, 0), R(0, 0));
+
+  const double c = std::cos(yaw);
+  const double s = std::sin(yaw);
+
+  Eigen::Matrix2d R_2d;
+  R_2d << c, -s, s, c;
+
+  Eigen::Vector2d t_2d(t.x(), t.y());
+  for (auto p : points) {
+    p = R_2d * p + t_2d;
+    out.push_back(p);
+  }
   return out;
 }
 
@@ -317,16 +422,27 @@ void GALONode::RebuildGroundMap() {
   }
 }
 
+void GALONode::RebuildObjectsMap() {
+  objects_map_.clear();
+
+  for (const auto& frame : objects_map_frames_) {
+    objects_map_.insert(objects_map_.end(), frame.begin(), frame.end());
+  }
+}
+
 Eigen::Matrix3d GALONode::MergeGroundAndPlanarRotation(
     const Eigen::Matrix3d& R_ground, const Eigen::Matrix2d& R_planar) {
-  // Extract planar yaw from 2D rotation
+  double roll, pitch, dummy_yaw;
+  std::tie(roll, pitch, dummy_yaw) = EulersFromMatrixSimple(R_ground);
+
   double yaw = std::atan2(R_planar(1, 0), R_planar(0, 0));
 
+  Eigen::AngleAxisd roll_rot(roll, Eigen::Vector3d::UnitX());
+  Eigen::AngleAxisd pitch_rot(pitch, Eigen::Vector3d::UnitY());
   Eigen::AngleAxisd yaw_rot(yaw, Eigen::Vector3d::UnitZ());
 
-  // Ground registration already contains roll/pitch correction.
-  // Planar registration contributes yaw.
-  return yaw_rot.toRotationMatrix() * R_ground;
+  return yaw_rot.toRotationMatrix() * pitch_rot.toRotationMatrix() *
+         roll_rot.toRotationMatrix();
 }
 
 Eigen::Vector3d GALONode::MergeGroundAndPlanarTranslation(

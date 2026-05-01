@@ -10,3 +10,14 @@ float GetDelayMs(const time_pt& start, const time_pt& end) {
       std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
   return static_cast<float>(milliseconds.count());
 }
+
+std::string VectorToString(const Eigen::VectorXd& vec) {
+  // Arguments: precision, flags, coeffSeparator, rowSeparator, rowPrefix,
+  // rowSuffix, matPrefix, matSuffix
+  Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols,
+                               ", ", ", ", "", "", "[", "]");
+
+  std::stringstream ss;
+  ss << vec.format(CommaInitFmt);
+  return ss.str();
+}

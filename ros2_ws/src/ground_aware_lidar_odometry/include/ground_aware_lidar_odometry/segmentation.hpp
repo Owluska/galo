@@ -1,5 +1,8 @@
 #pragma once
 #include <math.h>
+#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
 
 #include <Eigen/Dense>
 #include <algorithm>
@@ -183,7 +186,9 @@ class GroundRegistration {
       : params_(params), logger_(logger), clock_(clock) {}
   GroundRegistrationResult Align(const std::vector<GroundPatch>& map,
                                  const std::vector<GroundPatch>& current,
-                                 const Eigen::Matrix3d& R_imu_delta) const;
+                                 const Eigen::Matrix3d& R_imu_prior,
+                                 const Eigen::Matrix3d& R_initial,
+                                 const Eigen::Vector3d& t_initial) const;
 
  private:
   GroundRegistrationParams params_;
@@ -196,6 +201,11 @@ class GroundRegistration {
   static Eigen::Vector3d LogSO3(const Eigen::Matrix3d& R);
   int FindNearestPatch(const Eigen::Vector3d& p, const Eigen::Vector3d& normal,
                        const std::vector<GroundPatch>& map) const;
+
+  int FindNearestPatchKDTree(
+      const Eigen::Vector3d& p, const Eigen::Vector3d& normal,
+      const std::vector<GroundPatch>& map,
+      const pcl::KdTreeFLANN<pcl::PointXYZ>& kdtree) const;
 };
 
 class PlanarRegistration {
@@ -205,7 +215,9 @@ class PlanarRegistration {
       : params_(params), logger_(logger), clock_(clock) {}
 
   PlanarRegistrationResult Align(const std::vector<Eigen::Vector2d>& map,
-                                 const std::vector<Eigen::Vector2d>& current);
+                                 const std::vector<Eigen::Vector2d>& current,
+                                 const Eigen::Matrix2d& R_initial,
+                                 const Eigen::Vector2d& t_initial);
   std::vector<Eigen::Vector2d> ExtractPoints(
       const CloudMsg& cloud, const std::vector<PointLabels>& labels) const;
 

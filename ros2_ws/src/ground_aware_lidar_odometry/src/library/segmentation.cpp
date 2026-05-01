@@ -390,21 +390,86 @@ Eigen::Vector3d GroundRegistration::LogSO3(const Eigen::Matrix3d& R) {
   return w;
 }
 
+int GroundRegistration::FindNearestPatchKDTree(
+    const Eigen::Vector3d& p, const Eigen::Vector3d& normal,
+    const std::vector<GroundPatch>& map,
+    const pcl::KdTreeFLANN<pcl::PointXYZ>& kdtree) const {
+  if (map.empty()) return -1;
+
+  pcl::PointXYZ query;
+  query.x = static_cast<float>(p.x());
+  query.y = static_cast<float>(p.y());
+  query.z = 0.0f;
+
+  constexpr int K = 8;
+
+  std::vector<int> indices(K);
+  std::vector<float> dists2(K);
+
+  int found = kdtree.nearestKSearch(query, K, indices, dists2);
+  if (found <= 0) return -1;
+
+  const double max_dist2 =
+      params_.max_match_distance * params_.max_match_distance;
+
+  int best_idx = -1;
+  double best_dist2 = max_dist2;
+
+  Eigen::Vector3d normal_n = normal.normalized();
+
+  for (int j = 0; j < found; ++j) {
+    int idx = indices[j];
+    if (idx < 0 || static_cast<size_t>(idx) >= map.size()) continue;
+
+    if (static_cast<double>(dists2[j]) > max_dist2) continue;
+
+    const auto& m = map[idx];
+
+    double normal_dot = normal_n.dot(m.normal.normalized());
+    if (normal_dot < params_.min_normal_dot) continue;
+
+    if (static_cast<double>(dists2[j]) < best_dist2) {
+      best_dist2 = static_cast<double>(dists2[j]);
+      best_idx = idx;
+    }
+  }
+
+  return best_idx;
+}
+
 GroundRegistrationResult GroundRegistration::Align(
     const std::vector<GroundPatch>& map,
-    const std::vector<GroundPatch>& current,
-    const Eigen::Matrix3d& R_imu_delta) const {
+    const std::vector<GroundPatch>& current, const Eigen::Matrix3d& R_imu_prior,
+    const Eigen::Matrix3d& R_initial, const Eigen::Vector3d& t_initial) const {
   GroundRegistrationResult result;
   if (current.empty() || map.empty()) {
     RCLCPP_WARN(logger_,
                 "GroundRegistration::Align: either map or current patches are "
-                "empty: %d, %d",
+                "empty: %zu, %zu",
                 current.size(), map.size());
     return result;
   }
+  pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(
+      new pcl::PointCloud<pcl::PointXYZ>());
 
-  Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
-  Eigen::Vector3d t = Eigen::Vector3d::Zero();
+  map_cloud->points.reserve(map.size());
+
+  for (const auto& patch : map) {
+    pcl::PointXYZ pt;
+    pt.x = static_cast<float>(patch.centroid.x());
+    pt.y = static_cast<float>(patch.centroid.y());
+    pt.z = 0.0f;
+    map_cloud->points.push_back(pt);
+  }
+
+  map_cloud->width = static_cast<uint32_t>(map_cloud->points.size());
+  map_cloud->height = 1;
+  map_cloud->is_dense = true;
+
+  pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+  kdtree.setInputCloud(map_cloud);
+  Eigen::Matrix3d R = R_initial;
+  Eigen::Vector3d t = t_initial;
 
   int final_matches = 0;
   double final_abs_residual_sum = 0.0;
@@ -425,7 +490,7 @@ GroundRegistrationResult GroundRegistration::Align(
       Eigen::Vector3d p = R * cur.centroid + t;
       Eigen::Vector3d cur_normal = R * cur.normal;
 
-      int match_idx = FindNearestPatch(p, cur_normal, map);
+      int match_idx = FindNearestPatchKDTree(p, cur_normal, map, kdtree);
       if (match_idx < 0) {
         continue;
       }
@@ -443,8 +508,13 @@ GroundRegistrationResult GroundRegistration::Align(
 
       double J_dz = n.z();
 
-      Eigen::Matrix3d p_skew = Skew(p);
-      Eigen::RowVector3d J_rot = -n.transpose() * p_skew;
+      Eigen::Matrix3d cur_skew = Skew(cur.centroid);
+
+      // Right perturbation:
+      // p = R * cur + t
+      // R_new = R * Exp(dtheta)
+      // dp / dtheta = -R * skew(cur)
+      Eigen::RowVector3d J_rot = -n.transpose() * R * cur_skew;
 
       double J_roll = J_rot.x();
       double J_pitch = J_rot.y();
@@ -477,11 +547,11 @@ GroundRegistrationResult GroundRegistration::Align(
     }
 
     // IMU SO(3) prior:
-    // R should stay close to R_imu_delta.
+    // R should stay close to absolute IMU-predicted map<-lidar rotation.
     // R_err = R_imu_delta^T * R
     // log(R_err) is angular error in radians.
     if (params_.use_imu_prior) {
-      Eigen::Matrix3d R_err = R_imu_delta.transpose() * R;
+      Eigen::Matrix3d R_err = R_imu_prior.transpose() * R;
       Eigen::Vector3d rot_err = LogSO3(R_err);
 
       // State is [dz, roll, pitch].
@@ -549,7 +619,8 @@ GroundRegistrationResult GroundRegistration::Align(
     t.z() += dx(0);
 
     Eigen::Vector3d dtheta(dx(1), dx(2), 0.0);
-    R = ExpSO3(dtheta) * R;
+    // Right update: local/body-frame roll-pitch correction.
+    R = R * ExpSO3(dtheta);
 
     final_matches = num_matches;
     final_abs_residual_sum = abs_residual_sum;
@@ -618,63 +689,123 @@ std::vector<Eigen::Vector2d> PlanarRegistration::Filter(
 
 PlanarRegistrationResult PlanarRegistration::Align(
     const std::vector<Eigen::Vector2d>& map,
-    const std::vector<Eigen::Vector2d>& current) {
+    const std::vector<Eigen::Vector2d>& current,
+    const Eigen::Matrix2d& R_initial, const Eigen::Vector2d& t_initial) {
   PlanarRegistrationResult result;
 
   if (map.empty() || current.empty()) {
     RCLCPP_WARN(logger_,
-                "PlanarRegistration::Align: either map or current patches are "
-                "empty: %d, %d",
+                "PlanarRegistration::Align: either map or current points are "
+                "empty: current=%zu, map=%zu",
                 current.size(), map.size());
     return result;
   }
-  Eigen::Matrix2d R = Eigen::Matrix2d::Identity();
-  Eigen::Vector2d t = Eigen::Vector2d::Zero();
+
+  // ------------------------------------------------------------
+  // Build KD-tree for map points.
+  // Map points are fixed during this Align call.
+  // ------------------------------------------------------------
+  pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(
+      new pcl::PointCloud<pcl::PointXYZ>());
+
+  map_cloud->points.reserve(map.size());
+
+  for (const auto& p : map) {
+    pcl::PointXYZ pt;
+    pt.x = static_cast<float>(p.x());
+    pt.y = static_cast<float>(p.y());
+    pt.z = 0.0f;
+    map_cloud->points.push_back(pt);
+  }
+
+  map_cloud->width = static_cast<uint32_t>(map_cloud->points.size());
+  map_cloud->height = 1;
+  map_cloud->is_dense = true;
+
+  pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+  kdtree.setInputCloud(map_cloud);
+
+  // ------------------------------------------------------------
+  // Initial transform: current -> map
+  // ------------------------------------------------------------
+  Eigen::Matrix2d R = R_initial;
+  Eigen::Vector2d t = t_initial;
+
   int final_matches = 0;
-  double final_residual_sum = 0;
-  for (int iter = 0; iter < params_.max_iterations; iter++) {
+  double final_residual_sum = 0.0;
+
+  const double max_match_dist2 =
+      params_.max_match_distance * params_.max_match_distance;
+
+  for (int iter = 0; iter < params_.max_iterations; ++iter) {
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
 
     int num_matches = 0;
-    double residual_sum = 0;
+    double residual_sum = 0.0;
+
     for (const auto& cur_pt : current) {
+      // Transform current point using current estimate.
       Eigen::Vector2d p = R * cur_pt + t;
-      double best_dist2 =
-          params_.max_match_distance * params_.max_match_distance;
-      bool found_match = false;
-      Eigen::Vector2d matched_pt = Eigen::Vector2d::Zero();
-      for (const auto& prev_pt : map) {
-        Eigen::Vector2d matched_pt = Eigen::Vector2d::Zero();
-        double dist2 = (cur_pt - prev_pt).squaredNorm();
-        if (dist2 < best_dist2) {
-          best_dist2 = dist2;
-          matched_pt = prev_pt;
-          found_match = true;
-        }
+
+      // --------------------------------------------------------
+      // KD-tree nearest-neighbor search in map frame.
+      // Important: query using transformed point p, not raw cur_pt.
+      // --------------------------------------------------------
+      pcl::PointXYZ query;
+      query.x = static_cast<float>(p.x());
+      query.y = static_cast<float>(p.y());
+      query.z = 0.0f;
+
+      std::vector<int> indices(1);
+      std::vector<float> dists2(1);
+
+      int found = kdtree.nearestKSearch(query, 1, indices, dists2);
+
+      if (found <= 0) {
+        continue;
       }
-      if (!found_match) continue;
+
+      if (static_cast<double>(dists2[0]) > max_match_dist2) {
+        continue;
+      }
+
+      const Eigen::Vector2d matched_pt = map[indices[0]];
       Eigen::Vector2d r = p - matched_pt;
+      Eigen::Vector2d d_yaw_local;
+      d_yaw_local << -cur_pt.y(), cur_pt.x();
+
+      Eigen::Vector2d d_yaw_map = R * d_yaw_local;
+
       Eigen::Matrix<double, 2, 3> J;
-      // clang-format off
-      J << 1.0, 0.0, -p.y(), 
-           0.0, 1.0,  p.x();
-      // clang-format on
+      J << 1.0, 0.0, d_yaw_map.x(), 0.0, 1.0, d_yaw_map.y();
+
       double weight = 1.0;
+
       H += weight * J.transpose() * J;
       b += weight * J.transpose() * r;
+
       ++num_matches;
       residual_sum += r.norm();
     }
+
     if (num_matches < params_.min_matches) {
+      RCLCPP_WARN(logger_,
+                  "PlanarRegistration::Align: low amount of matches %d / %d",
+                  num_matches, params_.min_matches);
       result.valid = false;
       return result;
     }
 
-    H += params_.damping * Eigen::Matrix3d::Identity();
+    Eigen::Matrix3d H_damped = H;
+    H_damped.diagonal().array() += params_.damping;
 
-    Eigen::Vector3d dx = -H.ldlt().solve(b);
+    Eigen::Vector3d dx = -H_damped.ldlt().solve(b);
+
     if (!dx.allFinite()) {
+      RCLCPP_WARN(logger_,
+                  "PlanarRegistration::Align: dx has invalid values %s",
+                  VectorToString(dx).c_str());
       result.valid = false;
       return result;
     }
@@ -682,6 +813,9 @@ PlanarRegistrationResult PlanarRegistration::Align(
     if (std::abs(dx.x()) > params_.max_dx ||
         std::abs(dx.y()) > params_.max_dy ||
         std::abs(dx.z()) > params_.max_dyaw) {
+      RCLCPP_WARN(logger_,
+                  "PlanarRegistration::Align: dx has too big values %s",
+                  VectorToString(dx).c_str());
       result.valid = false;
       return result;
     }
@@ -695,15 +829,14 @@ PlanarRegistrationResult PlanarRegistration::Align(
     const double s = std::sin(dtheta);
 
     Eigen::Matrix2d dR;
-    // clang-format off
-    dR << c, -s, 
-          s,  c;
-    // clang-format on
+    dR << c, -s, s, c;
 
     Eigen::Vector2d dt(dx.x(), dx.y());
 
-    R = dR * R;
-    t = dR * t + dt;
+    // Right update: rotate in local/current lidar frame.
+    // Translation is an additive map-frame correction.
+    R = R * dR;
+    t = t + dt;
 
     final_matches = num_matches;
     final_residual_sum = residual_sum;
@@ -712,6 +845,7 @@ PlanarRegistrationResult PlanarRegistration::Align(
       break;
     }
   }
+
   result.R = R;
   result.t = t;
   result.mean_residual =

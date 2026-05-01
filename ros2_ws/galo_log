@@ -1,0 +1,251 @@
+[INFO] [launch]: All log files can be found below /root/.ros/log/2026-05-01-12-12-04-847414-kkagirins-MRA-XXX-1932704
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [node-1]: process started with pid [1932705]
+[node-1] [33m[WARN] [1777637528.181605800] [GALOnode]: Either objects or ground map is empty 0 0[0m
+[node-1] [0m[INFO] [1777637528.182036605] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 5, objects_extration - 1, ground_extration - 13[0m
+[node-1] [0m[INFO] [1777637528.319106769] [GALOnode]: GALO pose | t=[0.000 0.000 0.000] | delta=[0.616 0.024 0.003] | dist_xy=0.000 dz=0.000[0m
+[node-1] [0m[INFO] [1777637528.319165637] [GALOnode]: Ground result | valid=1 matches=65 mean_abs_res=0.0974 t_ground=[0.000 0.000 0.003] rpy_ground=[-0.00194 0.00179 -0.00000][0m
+[node-1] [0m[INFO] [1777637528.319181356] [GALOnode]: IMU delta | rpy=[-0.00086 -0.00118 0.00004][0m
+[node-1] [0m[INFO] [1777637528.820719489] [GALOnode]: GALO pose | t=[2.164 0.040 -0.050] | delta=[0.446 -0.028 -0.009] | dist_xy=2.164 dz=-0.050[0m
+[node-1] [0m[INFO] [1777637528.820786644] [GALOnode]: Ground result | valid=1 matches=73 mean_abs_res=0.0778 t_ground=[2.164 0.040 -0.059] rpy_ground=[-0.00247 0.00629 -0.00120][0m
+[node-1] [0m[INFO] [1777637528.820801634] [GALOnode]: IMU delta | rpy=[0.00012 -0.00081 0.00003][0m
+[node-1] [0m[INFO] [1777637529.427957635] [GALOnode]: GALO pose | t=[4.438 -0.009 -0.186] | delta=[0.374 -0.020 -0.017] | dist_xy=4.438 dz=-0.186[0m
+[node-1] [0m[INFO] [1777637529.428028338] [GALOnode]: Ground result | valid=1 matches=74 mean_abs_res=0.0474 t_ground=[4.438 -0.009 -0.210] rpy_ground=[0.00613 0.01132 0.00323][0m
+[node-1] [0m[INFO] [1777637529.428044700] [GALOnode]: IMU delta | rpy=[0.00179 0.00005 0.00001][0m
+[node-1] [0m[INFO] [1777637530.012479743] [GALOnode]: GALO pose | t=[6.322 -0.049 -0.299] | delta=[0.390 0.022 0.025] | dist_xy=6.322 dz=-0.299[0m
+[node-1] [0m[INFO] [1777637530.012520377] [GALOnode]: Ground result | valid=1 matches=74 mean_abs_res=0.0494 t_ground=[6.322 -0.049 -0.296] rpy_ground=[0.00957 0.02310 0.00524][0m
+[node-1] [0m[INFO] [1777637530.012533864] [GALOnode]: IMU delta | rpy=[-0.00059 0.00055 -0.00003][0m
+[node-1] [33m[WARN] [1777637530.097071948] [GALOnode]: Queue index is out of range: 82[0m
+[node-1] [0m[INFO] [1777637530.097122111] [GALOnode]: Scan time: 1697006197.175760 | point_time 1697006197.175760 | IMU buffer: 83 | first imu: 1697006195.177989 | last imu: 1697006197.147818[0m
+[node-1] [0m[INFO] [1777637530.223644846] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 6, objects_extration - 1, ground_extration - 14, planar_registration - 47, ground_registration - 4[0m
+[node-1] [0m[INFO] [1777637530.532351164] [GALOnode]: GALO pose | t=[8.106 -0.029 -0.449] | delta=[0.363 0.037 0.001] | dist_xy=8.106 dz=-0.449[0m
+[node-1] [0m[INFO] [1777637530.532406903] [GALOnode]: Ground result | valid=1 matches=81 mean_abs_res=0.0571 t_ground=[8.106 -0.029 -0.474] rpy_ground=[0.00312 0.02326 0.00663][0m
+[node-1] [0m[INFO] [1777637530.532422703] [GALOnode]: IMU delta | rpy=[-0.00147 0.00021 -0.00002][0m
+[node-1] [0m[INFO] [1777637531.098838633] [GALOnode]: GALO pose | t=[9.565 -0.002 -0.592] | delta=[0.372 -0.002 -0.040] | dist_xy=9.565 dz=-0.592[0m
+[node-1] [0m[INFO] [1777637531.098908116] [GALOnode]: Ground result | valid=1 matches=84 mean_abs_res=0.0606 t_ground=[9.565 -0.002 -0.626] rpy_ground=[0.00139 0.02665 0.00615][0m
+[node-1] [0m[INFO] [1777637531.098925133] [GALOnode]: IMU delta | rpy=[0.00016 -0.00026 0.00001][0m
+[node-1] [0m[INFO] [1777637531.638191809] [GALOnode]: GALO pose | t=[11.711 -0.022 -0.755] | delta=[0.402 -0.002 -0.014] | dist_xy=11.711 dz=-0.755[0m
+[node-1] [0m[INFO] [1777637531.638236419] [GALOnode]: Ground result | valid=1 matches=79 mean_abs_res=0.0443 t_ground=[11.711 -0.022 -0.786] rpy_ground=[0.00510 0.03100 0.00563][0m
+[node-1] [0m[INFO] [1777637531.638249461] [GALOnode]: IMU delta | rpy=[0.00091 0.00005 0.00000][0m
+[node-1] [0m[INFO] [1777637532.226703539] [GALOnode]: GALO pose | t=[13.861 -0.037 -0.957] | delta=[0.371 0.038 -0.015] | dist_xy=13.861 dz=-0.957[0m
+[node-1] [0m[INFO] [1777637532.226775536] [GALOnode]: Ground result | valid=1 matches=80 mean_abs_res=0.0614 t_ground=[13.861 -0.037 -0.994] rpy_ground=[0.00351 0.03652 0.00399][0m
+[node-1] [0m[INFO] [1777637532.226791111] [GALOnode]: IMU delta | rpy=[-0.00094 0.00056 -0.00003][0m
+[node-1] [0m[INFO] [1777637532.227302812] [GALOnode]: Time measurments (ms): deskew - 3, segmentaion - 7, objects_extration - 1, ground_extration - 15, planar_registration - 53, ground_registration - 4[0m
+[node-1] [0m[INFO] [1777637532.789693583] [GALOnode]: GALO pose | t=[15.978 -0.024 -1.189] | delta=[0.365 -0.016 -0.013] | dist_xy=15.978 dz=-1.189[0m
+[node-1] [0m[INFO] [1777637532.789765046] [GALOnode]: Ground result | valid=1 matches=81 mean_abs_res=0.0539 t_ground=[15.978 -0.024 -1.217] rpy_ground=[-0.00036 0.04211 0.00648][0m
+[node-1] [0m[INFO] [1777637532.789781640] [GALOnode]: IMU delta | rpy=[0.00050 -0.00036 0.00002][0m
+[node-1] [0m[INFO] [1777637533.354485281] [GALOnode]: GALO pose | t=[17.922 -0.085 -1.339] | delta=[0.300 0.015 -0.019] | dist_xy=17.922 dz=-1.339[0m
+[node-1] [0m[INFO] [1777637533.354554529] [GALOnode]: Ground result | valid=1 matches=73 mean_abs_res=0.0551 t_ground=[17.922 -0.085 -1.364] rpy_ground=[0.00649 0.04535 0.00998][0m
+[node-1] [0m[INFO] [1777637533.354570164] [GALOnode]: IMU delta | rpy=[0.00117 -0.00072 0.00004][0m
+[node-1] [0m[INFO] [1777637533.936498696] [GALOnode]: GALO pose | t=[19.902 -0.087 -1.504] | delta=[0.367 0.027 -0.045] | dist_xy=19.902 dz=-1.504[0m
+[node-1] [0m[INFO] [1777637533.936548742] [GALOnode]: Ground result | valid=1 matches=64 mean_abs_res=0.0604 t_ground=[19.902 -0.087 -1.547] rpy_ground=[0.00681 0.04949 0.01051][0m
+[node-1] [0m[INFO] [1777637533.936564955] [GALOnode]: IMU delta | rpy=[-0.00066 -0.00052 0.00002][0m
+[node-1] [0m[INFO] [1777637534.239725778] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 6, objects_extration - 2, ground_extration - 14, planar_registration - 61, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637534.444608984] [GALOnode]: GALO pose | t=[21.561 -0.065 -1.656] | delta=[0.366 -0.030 -0.003] | dist_xy=21.561 dz=-1.656[0m
+[node-1] [0m[INFO] [1777637534.444654863] [GALOnode]: Ground result | valid=1 matches=73 mean_abs_res=0.0612 t_ground=[21.561 -0.065 -1.684] rpy_ground=[0.00501 0.05640 0.01186][0m
+[node-1] [0m[INFO] [1777637534.444701007] [GALOnode]: IMU delta | rpy=[0.00042 -0.00085 0.00004][0m
+[node-1] [0m[INFO] [1777637535.033583167] [GALOnode]: GALO pose | t=[23.193 -0.069 -1.825] | delta=[0.381 0.037 0.013] | dist_xy=23.194 dz=-1.825[0m
+[node-1] [0m[INFO] [1777637535.033655156] [GALOnode]: Ground result | valid=1 matches=67 mean_abs_res=0.0622 t_ground=[23.193 -0.069 -1.835] rpy_ground=[0.00967 0.05796 0.01481][0m
+[node-1] [0m[INFO] [1777637535.033671450] [GALOnode]: IMU delta | rpy=[0.00079 -0.00000 0.00000][0m
+[node-1] [0m[INFO] [1777637535.835657087] [GALOnode]: GALO pose | t=[23.947 -0.041 -1.885] | delta=[0.282 -0.036 -0.006] | dist_xy=23.947 dz=-1.885[0m
+[node-1] [0m[INFO] [1777637535.835706163] [GALOnode]: Ground result | valid=1 matches=61 mean_abs_res=0.0594 t_ground=[23.947 -0.041 -1.914] rpy_ground=[0.01067 0.06030 0.01324][0m
+[node-1] [0m[INFO] [1777637535.835719284] [GALOnode]: IMU delta | rpy=[0.00077 -0.00033 0.00002][0m
+[node-1] [0m[INFO] [1777637536.300958116] [GALOnode]: Time measurments (ms): deskew - 3, segmentaion - 5, objects_extration - 2, ground_extration - 14, planar_registration - 62, ground_registration - 3[0m
+[node-1] [0m[INFO] [1777637536.394355054] [GALOnode]: GALO pose | t=[25.859 -0.026 -2.059] | delta=[0.386 0.032 0.058] | dist_xy=25.859 dz=-2.059[0m
+[node-1] [0m[INFO] [1777637536.394418175] [GALOnode]: Ground result | valid=1 matches=59 mean_abs_res=0.0551 t_ground=[25.859 -0.026 -2.068] rpy_ground=[0.01126 0.06965 0.01536][0m
+[node-1] [0m[INFO] [1777637536.394434228] [GALOnode]: IMU delta | rpy=[-0.00030 0.00010 -0.00001][0m
+[node-1] [0m[INFO] [1777637536.981349411] [GALOnode]: GALO pose | t=[27.768 -0.016 -2.262] | delta=[0.352 0.002 0.041] | dist_xy=27.768 dz=-2.262[0m
+[node-1] [0m[INFO] [1777637536.981394326] [GALOnode]: Ground result | valid=1 matches=67 mean_abs_res=0.0683 t_ground=[27.768 -0.016 -2.275] rpy_ground=[0.01252 0.07516 0.01791][0m
+[node-1] [0m[INFO] [1777637536.981406769] [GALOnode]: IMU delta | rpy=[0.00020 0.00006 -0.00000][0m
+[node-1] [0m[INFO] [1777637537.560351495] [GALOnode]: GALO pose | t=[29.695 0.013 -2.423] | delta=[0.259 0.007 -0.018] | dist_xy=29.695 dz=-2.423[0m
+[node-1] [0m[INFO] [1777637537.560396010] [GALOnode]: Ground result | valid=1 matches=66 mean_abs_res=0.0649 t_ground=[29.695 0.013 -2.462] rpy_ground=[0.01561 0.08716 0.01723][0m
+[node-1] [0m[INFO] [1777637537.560410524] [GALOnode]: IMU delta | rpy=[-0.00006 0.00039 -0.00002][0m
+[node-1] [0m[INFO] [1777637538.149703163] [GALOnode]: GALO pose | t=[31.453 0.051 -2.620] | delta=[0.324 -0.036 0.050] | dist_xy=31.453 dz=-2.620[0m
+[node-1] [0m[INFO] [1777637538.149748095] [GALOnode]: Ground result | valid=1 matches=62 mean_abs_res=0.0656 t_ground=[31.453 0.051 -2.647] rpy_ground=[0.01704 0.10228 0.01687][0m
+[node-1] [0m[INFO] [1777637538.149761301] [GALOnode]: IMU delta | rpy=[-0.00035 0.00058 -0.00003][0m
+[node-1] [0m[INFO] [1777637538.345427332] [GALOnode]: Time measurments (ms): deskew - 3, segmentaion - 5, objects_extration - 2, ground_extration - 13, planar_registration - 66, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637538.744436517] [GALOnode]: GALO pose | t=[33.242 0.087 -2.834] | delta=[0.360 0.068 0.036] | dist_xy=33.242 dz=-2.834[0m
+[node-1] [0m[INFO] [1777637538.744481739] [GALOnode]: Ground result | valid=1 matches=63 mean_abs_res=0.0678 t_ground=[33.242 0.087 -2.894] rpy_ground=[0.02081 0.11365 0.01750][0m
+[node-1] [0m[INFO] [1777637538.744495450] [GALOnode]: IMU delta | rpy=[-0.00028 0.00040 -0.00002][0m
+[node-1] [0m[INFO] [1777637539.253391939] [GALOnode]: GALO pose | t=[34.770 0.131 -2.987] | delta=[0.300 -0.010 0.102] | dist_xy=34.770 dz=-2.987[0m
+[node-1] [0m[INFO] [1777637539.253464980] [GALOnode]: Ground result | valid=1 matches=60 mean_abs_res=0.0650 t_ground=[34.770 0.131 -3.007] rpy_ground=[0.02046 0.12782 0.01616][0m
+[node-1] [0m[INFO] [1777637539.253481768] [GALOnode]: IMU delta | rpy=[-0.00011 -0.00047 0.00002][0m
+[node-1] [0m[INFO] [1777637539.764205969] [GALOnode]: GALO pose | t=[36.328 0.183 -3.159] | delta=[0.274 0.060 0.202] | dist_xy=36.329 dz=-3.159[0m
+[node-1] [0m[INFO] [1777637539.764271160] [GALOnode]: Ground result | valid=1 matches=60 mean_abs_res=0.0605 t_ground=[36.328 0.183 -3.182] rpy_ground=[0.02354 0.14099 0.01472][0m
+[node-1] [0m[INFO] [1777637539.764287870] [GALOnode]: IMU delta | rpy=[0.00023 0.00056 -0.00003][0m
+[node-1] [0m[INFO] [1777637540.268606518] [GALOnode]: GALO pose | t=[37.750 0.197 -3.420] | delta=[0.357 0.042 0.185] | dist_xy=37.751 dz=-3.420[0m
+[node-1] [0m[INFO] [1777637540.268649953] [GALOnode]: Ground result | valid=1 matches=57 mean_abs_res=0.0673 t_ground=[37.750 0.197 -3.426] rpy_ground=[0.02890 0.15010 0.01509][0m
+[node-1] [0m[INFO] [1777637540.268663412] [GALOnode]: IMU delta | rpy=[0.00030 0.00049 -0.00002][0m
+[node-1] [0m[INFO] [1777637540.366499120] [GALOnode]: Time measurments (ms): deskew - 3, segmentaion - 5, objects_extration - 2, ground_extration - 13, planar_registration - 64, ground_registration - 3[0m
+[node-1] [0m[INFO] [1777637540.836274534] [GALOnode]: GALO pose | t=[39.590 0.270 -3.632] | delta=[0.298 0.057 -0.095] | dist_xy=39.591 dz=-3.632[0m
+[node-1] [0m[INFO] [1777637540.836322285] [GALOnode]: Ground result | valid=1 matches=61 mean_abs_res=0.0714 t_ground=[39.590 0.270 -3.697] rpy_ground=[0.03341 0.16512 0.00994][0m
+[node-1] [0m[INFO] [1777637540.836335682] [GALOnode]: IMU delta | rpy=[-0.00064 0.00109 -0.00006][0m
+[node-1] [0m[INFO] [1777637541.387666805] [GALOnode]: GALO pose | t=[41.432 0.297 -3.985] | delta=[0.343 -0.015 0.196] | dist_xy=41.433 dz=-3.985[0m
+[node-1] [0m[INFO] [1777637541.387744528] [GALOnode]: Ground result | valid=1 matches=50 mean_abs_res=0.0861 t_ground=[41.432 0.297 -4.030] rpy_ground=[0.03754 0.18204 0.01228][0m
+[node-1] [0m[INFO] [1777637541.387760898] [GALOnode]: IMU delta | rpy=[0.00018 0.00020 -0.00001][0m
+[node-1] [0m[INFO] [1777637541.963016997] [GALOnode]: GALO pose | t=[43.575 0.330 -4.421] | delta=[0.381 -0.101 0.342] | dist_xy=43.576 dz=-4.421[0m
+[node-1] [0m[INFO] [1777637541.963081645] [GALOnode]: Ground result | valid=1 matches=41 mean_abs_res=0.1104 t_ground=[43.575 0.330 -4.434] rpy_ground=[0.05335 0.20304 0.01467][0m
+[node-1] [0m[INFO] [1777637541.963098701] [GALOnode]: IMU delta | rpy=[0.00069 0.00214 -0.00011][0m
+[node-1] [0m[INFO] [1777637542.438707229] [GALOnode]: Time measurments (ms): deskew - 3, segmentaion - 5, objects_extration - 2, ground_extration - 11, planar_registration - 45, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637542.514333250] [GALOnode]: GALO pose | t=[45.887 0.331 -4.781] | delta=[0.369 -0.057 0.139] | dist_xy=45.889 dz=-4.781[0m
+[node-1] [0m[INFO] [1777637542.514376115] [GALOnode]: Ground result | valid=1 matches=47 mean_abs_res=0.1140 t_ground=[45.887 0.331 -4.838] rpy_ground=[0.05567 0.22119 0.02238][0m
+[node-1] [0m[INFO] [1777637542.514388977] [GALOnode]: IMU delta | rpy=[-0.00043 0.00149 -0.00008][0m
+[node-1] [0m[INFO] [1777637543.023469439] [GALOnode]: GALO pose | t=[48.197 0.354 -5.213] | delta=[0.404 0.035 0.114] | dist_xy=48.198 dz=-5.213[0m
+[node-1] [0m[INFO] [1777637543.023537907] [GALOnode]: Ground result | valid=1 matches=43 mean_abs_res=0.1437 t_ground=[48.197 0.354 -5.257] rpy_ground=[0.06753 0.25021 0.03078][0m
+[node-1] [0m[INFO] [1777637543.023554317] [GALOnode]: IMU delta | rpy=[0.00097 0.00006 0.00000][0m
+[node-1] [0m[INFO] [1777637543.593573153] [GALOnode]: GALO pose | t=[50.334 0.424 -5.660] | delta=[0.364 -0.177 0.161] | dist_xy=50.336 dz=-5.660[0m
+[node-1] [0m[INFO] [1777637543.593631754] [GALOnode]: Ground result | valid=1 matches=47 mean_abs_res=0.0896 t_ground=[50.334 0.424 -5.727] rpy_ground=[0.06795 0.27084 0.03337][0m
+[node-1] [0m[INFO] [1777637543.593647910] [GALOnode]: IMU delta | rpy=[-0.00009 0.00124 -0.00008][0m
+[node-1] [0m[INFO] [1777637544.095703390] [GALOnode]: GALO pose | t=[51.332 0.455 -5.783] | delta=[0.440 0.046 0.106] | dist_xy=51.334 dz=-5.783[0m
+[node-1] [0m[INFO] [1777637544.095772019] [GALOnode]: Ground result | valid=1 matches=52 mean_abs_res=0.1312 t_ground=[51.332 0.455 -5.847] rpy_ground=[0.07168 0.28875 0.03567][0m
+[node-1] [0m[INFO] [1777637544.095788630] [GALOnode]: IMU delta | rpy=[-0.00048 0.00013 -0.00001][0m
+[node-1] [0m[INFO] [1777637544.489071321] [GALOnode]: Time measurments (ms): deskew - 3, segmentaion - 5, objects_extration - 2, ground_extration - 13, planar_registration - 46, ground_registration - 4[0m
+[node-1] [0m[INFO] [1777637544.649129701] [GALOnode]: GALO pose | t=[53.976 0.558 -6.368] | delta=[0.443 -0.201 0.609] | dist_xy=53.979 dz=-6.368[0m
+[node-1] [0m[INFO] [1777637544.649175517] [GALOnode]: Ground result | valid=1 matches=59 mean_abs_res=0.1288 t_ground=[53.976 0.558 -6.402] rpy_ground=[0.07041 0.31165 0.04075][0m
+[node-1] [0m[INFO] [1777637544.649189036] [GALOnode]: IMU delta | rpy=[-0.00059 0.00090 -0.00006][0m
+[node-1] [0m[INFO] [1777637545.215600072] [GALOnode]: GALO pose | t=[56.651 0.645 -7.098] | delta=[0.373 0.046 -0.173] | dist_xy=56.654 dz=-7.098[0m
+[node-1] [0m[INFO] [1777637545.215667970] [GALOnode]: Ground result | valid=1 matches=48 mean_abs_res=0.1177 t_ground=[56.651 0.645 -7.245] rpy_ground=[0.08100 0.31720 0.05717][0m
+[node-1] [0m[INFO] [1777637545.215683979] [GALOnode]: IMU delta | rpy=[0.00037 -0.00087 0.00005][0m
+[node-1] [0m[INFO] [1777637545.719029971] [GALOnode]: GALO pose | t=[58.582 0.776 -7.620] | delta=[0.475 -0.022 0.368] | dist_xy=58.588 dz=-7.620[0m
+[node-1] [0m[INFO] [1777637545.719093526] [GALOnode]: Ground result | valid=1 matches=39 mean_abs_res=0.1186 t_ground=[58.582 0.776 -7.699] rpy_ground=[0.08758 0.34204 0.06212][0m
+[node-1] [0m[INFO] [1777637545.719109799] [GALOnode]: IMU delta | rpy=[-0.00048 0.00035 -0.00002][0m
+[node-1] [0m[INFO] [1777637546.303186853] [GALOnode]: GALO pose | t=[60.968 0.917 -8.339] | delta=[0.391 0.215 -0.089] | dist_xy=60.975 dz=-8.339[0m
+[node-1] [0m[INFO] [1777637546.303233917] [GALOnode]: Ground result | valid=1 matches=36 mean_abs_res=0.1471 t_ground=[60.968 0.917 -8.494] rpy_ground=[0.09044 0.34281 0.06980][0m
+[node-1] [0m[INFO] [1777637546.303247552] [GALOnode]: IMU delta | rpy=[-0.00046 -0.00151 0.00008][0m
+[node-1] [0m[INFO] [1777637546.504503108] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 4, objects_extration - 2, ground_extration - 9, planar_registration - 36, ground_registration - 1[0m
+[node-1] [0m[INFO] [1777637546.907738512] [GALOnode]: GALO pose | t=[62.620 1.054 -8.894] | delta=[0.301 0.104 -0.874] | dist_xy=62.629 dz=-8.894[0m
+[node-1] [0m[INFO] [1777637546.907781083] [GALOnode]: Ground result | valid=1 matches=28 mean_abs_res=0.0914 t_ground=[62.620 1.054 -9.146] rpy_ground=[0.09332 0.32726 0.06942][0m
+[node-1] [0m[INFO] [1777637546.907794057] [GALOnode]: IMU delta | rpy=[-0.00058 -0.00051 0.00002][0m
+[node-1] [0m[INFO] [1777637547.497312046] [GALOnode]: GALO pose | t=[65.471 1.268 -10.029] | delta=[0.337 -0.022 -0.791] | dist_xy=65.484 dz=-10.029[0m
+[node-1] [0m[INFO] [1777637547.497376899] [GALOnode]: Ground result | valid=1 matches=22 mean_abs_res=0.1145 t_ground=[65.471 1.268 -10.236] rpy_ground=[0.09385 0.30996 0.07258][0m
+[node-1] [0m[INFO] [1777637547.497391721] [GALOnode]: IMU delta | rpy=[-0.00049 -0.00030 0.00001][0m
+[node-1] [0m[INFO] [1777637548.095860206] [GALOnode]: GALO pose | t=[68.465 1.490 -11.039] | delta=[0.636 -0.204 1.592] | dist_xy=68.481 dz=-11.039[0m
+[node-1] [0m[INFO] [1777637548.095925783] [GALOnode]: Ground result | valid=1 matches=23 mean_abs_res=0.2292 t_ground=[68.465 1.490 -10.920] rpy_ground=[0.08266 0.33389 0.08227][0m
+[node-1] [0m[INFO] [1777637548.095943552] [GALOnode]: IMU delta | rpy=[-0.00253 0.00048 -0.00003][0m
+[node-1] [0m[INFO] [1777637548.608382069] [GALOnode]: GALO pose | t=[70.166 1.667 -11.590] | delta=[0.464 -0.209 0.163] | dist_xy=70.186 dz=-11.590[0m
+[node-1] [0m[INFO] [1777637548.608427350] [GALOnode]: Ground result | valid=1 matches=33 mean_abs_res=0.1320 t_ground=[70.166 1.667 -11.699] rpy_ground=[0.08523 0.31069 0.09125][0m
+[node-1] [0m[INFO] [1777637548.608440920] [GALOnode]: IMU delta | rpy=[-0.00188 0.00072 -0.00003][0m
+[node-1] [0m[INFO] [1777637548.608731216] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 4, objects_extration - 2, ground_extration - 11, planar_registration - 34, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637549.111755930] [GALOnode]: GALO pose | t=[72.664 1.920 -12.225] | delta=[0.393 -0.119 -0.135] | dist_xy=72.689 dz=-12.225[0m
+[node-1] [0m[INFO] [1777637549.111804897] [GALOnode]: Ground result | valid=1 matches=40 mean_abs_res=0.1793 t_ground=[72.664 1.920 -12.351] rpy_ground=[0.07974 0.30951 0.09797][0m
+[node-1] [0m[INFO] [1777637549.111819101] [GALOnode]: IMU delta | rpy=[-0.00152 0.00061 -0.00002][0m
+[node-1] [0m[INFO] [1777637549.704127637] [GALOnode]: GALO pose | t=[75.196 2.180 -13.045] | delta=[0.442 0.069 -0.035] | dist_xy=75.227 dz=-13.045[0m
+[node-1] [0m[INFO] [1777637549.704169756] [GALOnode]: Ground result | valid=1 matches=34 mean_abs_res=0.1700 t_ground=[75.196 2.180 -13.170] rpy_ground=[0.07352 0.29996 0.09773][0m
+[node-1] [0m[INFO] [1777637549.704183136] [GALOnode]: IMU delta | rpy=[-0.00116 0.00183 -0.00003][0m
+[node-1] [0m[INFO] [1777637550.205540339] [GALOnode]: GALO pose | t=[77.223 2.459 -13.628] | delta=[0.386 0.090 -0.670] | dist_xy=77.262 dz=-13.628[0m
+[node-1] [0m[INFO] [1777637550.205586686] [GALOnode]: Ground result | valid=1 matches=37 mean_abs_res=0.1273 t_ground=[77.223 2.459 -13.705] rpy_ground=[0.06384 0.30072 0.08838][0m
+[node-1] [0m[INFO] [1777637550.205600937] [GALOnode]: IMU delta | rpy=[-0.00150 -0.00212 0.00001][0m
+[node-1] [0m[INFO] [1777637550.611140424] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 4, objects_extration - 1, ground_extration - 12, planar_registration - 38, ground_registration - 1[0m
+[node-1] [0m[INFO] [1777637550.711292488] [GALOnode]: GALO pose | t=[79.514 2.663 -14.191] | delta=[0.562 0.124 0.912] | dist_xy=79.559 dz=-14.191[0m
+[node-1] [0m[INFO] [1777637550.711336405] [GALOnode]: Ground result | valid=1 matches=33 mean_abs_res=0.1516 t_ground=[79.514 2.663 -14.205] rpy_ground=[0.05428 0.30560 0.08933][0m
+[node-1] [0m[INFO] [1777637550.711349363] [GALOnode]: IMU delta | rpy=[-0.00090 -0.00022 -0.00000][0m
+[node-1] [0m[INFO] [1777637551.212177079] [GALOnode]: GALO pose | t=[81.582 2.832 -14.489] | delta=[0.488 0.018 -0.232] | dist_xy=81.631 dz=-14.489[0m
+[node-1] [0m[INFO] [1777637551.212225636] [GALOnode]: Ground result | valid=1 matches=38 mean_abs_res=0.1536 t_ground=[81.582 2.832 -14.552] rpy_ground=[0.05038 0.30926 0.08879][0m
+[node-1] [0m[INFO] [1777637551.212243607] [GALOnode]: IMU delta | rpy=[0.00012 -0.00019 0.00000][0m
+[node-1] [0m[INFO] [1777637551.803535433] [GALOnode]: GALO pose | t=[84.180 3.086 -15.020] | delta=[0.541 0.080 0.508] | dist_xy=84.237 dz=-15.020[0m
+[node-1] [0m[INFO] [1777637551.803583916] [GALOnode]: Ground result | valid=1 matches=39 mean_abs_res=0.1241 t_ground=[84.180 3.086 -15.042] rpy_ground=[0.04372 0.33039 0.08499][0m
+[node-1] [0m[INFO] [1777637551.803597454] [GALOnode]: IMU delta | rpy=[-0.00177 -0.00077 -0.00001][0m
+[node-1] [0m[INFO] [1777637552.307086361] [GALOnode]: GALO pose | t=[86.353 3.301 -15.542] | delta=[0.483 0.119 0.171] | dist_xy=86.416 dz=-15.542[0m
+[node-1] [0m[INFO] [1777637552.307129707] [GALOnode]: Ground result | valid=1 matches=42 mean_abs_res=0.0994 t_ground=[86.353 3.301 -15.599] rpy_ground=[0.03967 0.33046 0.07986][0m
+[node-1] [0m[INFO] [1777637552.307142092] [GALOnode]: IMU delta | rpy=[-0.00267 -0.00122 -0.00003][0m
+[node-1] [0m[INFO] [1777637552.717203006] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 4, objects_extration - 1, ground_extration - 15, planar_registration - 37, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637552.813253993] [GALOnode]: GALO pose | t=[88.494 3.486 -15.943] | delta=[0.433 -0.060 -0.137] | dist_xy=88.562 dz=-15.943[0m
+[node-1] [0m[INFO] [1777637552.813296774] [GALOnode]: Ground result | valid=1 matches=45 mean_abs_res=0.1825 t_ground=[88.494 3.486 -16.093] rpy_ground=[0.03119 0.34528 0.07617][0m
+[node-1] [0m[INFO] [1777637552.813309780] [GALOnode]: IMU delta | rpy=[-0.00146 0.00086 0.00002][0m
+[node-1] [0m[INFO] [1777637553.408221085] [GALOnode]: GALO pose | t=[91.174 3.712 -16.811] | delta=[0.523 0.230 0.230] | dist_xy=91.250 dz=-16.811[0m
+[node-1] [0m[INFO] [1777637553.408266847] [GALOnode]: Ground result | valid=1 matches=53 mean_abs_res=0.0875 t_ground=[91.174 3.712 -16.865] rpy_ground=[0.02666 0.35697 0.06660][0m
+[node-1] [0m[INFO] [1777637553.408279923] [GALOnode]: IMU delta | rpy=[-0.00130 0.00003 -0.00000][0m
+[node-1] [0m[INFO] [1777637553.915503323] [GALOnode]: GALO pose | t=[93.328 3.854 -17.451] | delta=[0.490 0.241 0.111] | dist_xy=93.408 dz=-17.451[0m
+[node-1] [0m[INFO] [1777637553.915546086] [GALOnode]: Ground result | valid=1 matches=60 mean_abs_res=0.1290 t_ground=[93.328 3.854 -17.548] rpy_ground=[0.01638 0.36813 0.06245][0m
+[node-1] [0m[INFO] [1777637553.915558454] [GALOnode]: IMU delta | rpy=[-0.00164 0.00067 0.00002][0m
+[node-1] [0m[INFO] [1777637554.520856561] [GALOnode]: GALO pose | t=[96.086 4.108 -18.231] | delta=[0.521 0.057 -0.048] | dist_xy=96.173 dz=-18.231[0m
+[node-1] [0m[INFO] [1777637554.520928006] [GALOnode]: Ground result | valid=1 matches=56 mean_abs_res=0.1844 t_ground=[96.086 4.108 -18.356] rpy_ground=[0.00997 0.38211 0.05367][0m
+[node-1] [0m[INFO] [1777637554.520944516] [GALOnode]: IMU delta | rpy=[-0.00085 0.00026 0.00001][0m
+[node-1] [0m[INFO] [1777637554.809594739] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 4, objects_extration - 1, ground_extration - 13, planar_registration - 40, ground_registration - 3[0m
+[node-1] [0m[INFO] [1777637555.113262963] [GALOnode]: GALO pose | t=[98.822 4.245 -19.060] | delta=[0.531 0.071 0.356] | dist_xy=98.913 dz=-19.060[0m
+[node-1] [0m[INFO] [1777637555.113308302] [GALOnode]: Ground result | valid=1 matches=54 mean_abs_res=0.1982 t_ground=[98.822 4.245 -19.221] rpy_ground=[0.00403 0.39595 0.04864][0m
+[node-1] [0m[INFO] [1777637555.113322093] [GALOnode]: IMU delta | rpy=[-0.00002 0.00082 0.00004][0m
+[node-1] [0m[INFO] [1777637555.618262729] [GALOnode]: GALO pose | t=[101.109 4.397 -19.835] | delta=[0.583 -0.013 0.181] | dist_xy=101.205 dz=-19.835[0m
+[node-1] [0m[INFO] [1777637555.618331000] [GALOnode]: Ground result | valid=1 matches=55 mean_abs_res=0.1832 t_ground=[101.109 4.397 -19.933] rpy_ground=[-0.00097 0.39940 0.04200][0m
+[node-1] [0m[INFO] [1777637555.618348950] [GALOnode]: IMU delta | rpy=[-0.00010 -0.00054 -0.00003][0m
+[node-1] [0m[INFO] [1777637556.211062685] [GALOnode]: GALO pose | t=[103.945 4.542 -20.821] | delta=[0.529 0.411 0.530] | dist_xy=104.045 dz=-20.821[0m
+[node-1] [0m[INFO] [1777637556.211105198] [GALOnode]: Ground result | valid=1 matches=53 mean_abs_res=0.1989 t_ground=[103.945 4.542 -20.934] rpy_ground=[0.00548 0.41720 0.03861][0m
+[node-1] [0m[INFO] [1777637556.211117665] [GALOnode]: IMU delta | rpy=[0.00114 -0.00040 -0.00002][0m
+[node-1] [0m[INFO] [1777637556.808161829] [GALOnode]: GALO pose | t=[106.816 4.681 -21.731] | delta=[0.407 0.566 -0.024] | dist_xy=106.918 dz=-21.731[0m
+[node-1] [0m[INFO] [1777637556.808205933] [GALOnode]: Ground result | valid=1 matches=52 mean_abs_res=0.1706 t_ground=[106.816 4.681 -21.955] rpy_ground=[0.00948 0.41820 0.03682][0m
+[node-1] [0m[INFO] [1777637556.808218887] [GALOnode]: IMU delta | rpy=[0.00041 -0.00113 -0.00005][0m
+[node-1] [0m[INFO] [1777637556.905702013] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 4, objects_extration - 1, ground_extration - 11, planar_registration - 36, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637557.402471243] [GALOnode]: GALO pose | t=[109.631 4.895 -22.827] | delta=[0.461 0.213 -0.295] | dist_xy=109.740 dz=-22.827[0m
+[node-1] [0m[INFO] [1777637557.402518572] [GALOnode]: Ground result | valid=1 matches=34 mean_abs_res=0.1385 t_ground=[109.631 4.895 -22.988] rpy_ground=[0.01000 0.41177 0.02771][0m
+[node-1] [0m[INFO] [1777637557.402532396] [GALOnode]: IMU delta | rpy=[-0.00043 -0.00067 -0.00003][0m
+[node-1] [0m[INFO] [1777637557.987174447] [GALOnode]: GALO pose | t=[112.785 5.158 -23.752] | delta=[0.644 0.610 0.381] | dist_xy=112.903 dz=-23.752[0m
+[node-1] [0m[INFO] [1777637557.987235769] [GALOnode]: Ground result | valid=1 matches=26 mean_abs_res=0.1995 t_ground=[112.785 5.158 -23.955] rpy_ground=[0.02366 0.41323 0.01604][0m
+[node-1] [0m[INFO] [1777637557.987251650] [GALOnode]: IMU delta | rpy=[0.00006 -0.00001 -0.00000][0m
+[node-1] [0m[INFO] [1777637558.491758674] [GALOnode]: GALO pose | t=[114.818 5.234 -24.727] | delta=[0.905 0.129 2.248] | dist_xy=114.938 dz=-24.727[0m
+[node-1] [0m[INFO] [1777637558.491823776] [GALOnode]: Ground result | valid=1 matches=31 mean_abs_res=0.2066 t_ground=[114.818 5.234 -24.767] rpy_ground=[0.02004 0.40344 0.01191][0m
+[node-1] [0m[INFO] [1777637558.491840013] [GALOnode]: IMU delta | rpy=[0.00078 0.00015 0.00001][0m
+[node-1] [0m[INFO] [1777637559.005219353] [GALOnode]: GALO pose | t=[117.055 5.327 -25.409] | delta=[0.434 -0.197 0.195] | dist_xy=117.176 dz=-25.409[0m
+[node-1] [0m[INFO] [1777637559.005264849] [GALOnode]: Ground result | valid=1 matches=43 mean_abs_res=0.1389 t_ground=[117.055 5.327 -25.525] rpy_ground=[0.03134 0.39814 0.00640][0m
+[node-1] [0m[INFO] [1777637559.005278995] [GALOnode]: IMU delta | rpy=[0.00107 -0.00035 -0.00001][0m
+[node-1] [0m[INFO] [1777637559.005579404] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 3, objects_extration - 1, ground_extration - 10, planar_registration - 34, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637559.634626779] [GALOnode]: GALO pose | t=[119.588 5.351 -26.330] | delta=[0.427 -0.325 -0.128] | dist_xy=119.708 dz=-26.330[0m
+[node-1] [0m[INFO] [1777637559.634669113] [GALOnode]: Ground result | valid=1 matches=39 mean_abs_res=0.1507 t_ground=[119.588 5.351 -26.487] rpy_ground=[0.03766 0.40165 0.01212][0m
+[node-1] [0m[INFO] [1777637559.634682548] [GALOnode]: IMU delta | rpy=[0.00131 0.00078 0.00003][0m
+[node-1] [0m[INFO] [1777637560.198202870] [GALOnode]: GALO pose | t=[121.958 5.440 -27.198] | delta=[0.592 -0.629 0.380] | dist_xy=122.080 dz=-27.198[0m
+[node-1] [0m[INFO] [1777637560.198261005] [GALOnode]: Ground result | valid=1 matches=35 mean_abs_res=0.1452 t_ground=[121.958 5.440 -27.326] rpy_ground=[0.04826 0.40619 0.02453][0m
+[node-1] [0m[INFO] [1777637560.198276674] [GALOnode]: IMU delta | rpy=[0.00128 0.00095 0.00003][0m
+[node-1] [0m[INFO] [1777637560.702030936] [GALOnode]: GALO pose | t=[123.970 5.506 -27.989] | delta=[0.567 -0.577 0.311] | dist_xy=124.092 dz=-27.989[0m
+[node-1] [0m[INFO] [1777637560.702089756] [GALOnode]: Ground result | valid=1 matches=37 mean_abs_res=0.0827 t_ground=[123.970 5.506 -28.069] rpy_ground=[0.05386 0.41210 0.04133][0m
+[node-1] [0m[INFO] [1777637560.702108994] [GALOnode]: IMU delta | rpy=[0.00083 0.00126 0.00003][0m
+[node-1] [0m[INFO] [1777637561.092115843] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 3, objects_extration - 1, ground_extration - 9, planar_registration - 30, ground_registration - 2[0m
+[node-1] [0m[INFO] [1777637561.292546058] [GALOnode]: GALO pose | t=[126.438 5.630 -28.979] | delta=[0.509 -0.358 0.329] | dist_xy=126.563 dz=-28.979[0m
+[node-1] [0m[INFO] [1777637561.292608933] [GALOnode]: Ground result | valid=1 matches=30 mean_abs_res=0.1501 t_ground=[126.438 5.630 -29.102] rpy_ground=[0.06793 0.40001 0.05832][0m
+[node-1] [0m[INFO] [1777637561.292623785] [GALOnode]: IMU delta | rpy=[0.00094 0.00053 0.00001][0m
+[node-1] [0m[INFO] [1777637561.800943632] [GALOnode]: GALO pose | t=[128.492 5.720 -29.637] | delta=[0.578 -0.375 0.312] | dist_xy=128.620 dz=-29.637[0m
+[node-1] [0m[INFO] [1777637561.800984925] [GALOnode]: Ground result | valid=1 matches=26 mean_abs_res=0.1591 t_ground=[128.492 5.720 -29.755] rpy_ground=[0.08460 0.41549 0.07311][0m
+[node-1] [0m[INFO] [1777637561.800998307] [GALOnode]: IMU delta | rpy=[0.00138 0.00145 0.00002][0m
+[node-1] [0m[INFO] [1777637562.400447218] [GALOnode]: GALO pose | t=[130.724 5.762 -30.632] | delta=[0.341 -0.620 -0.278] | dist_xy=130.851 dz=-30.632[0m
+[node-1] [0m[INFO] [1777637562.400513377] [GALOnode]: Ground result | valid=1 matches=25 mean_abs_res=0.0845 t_ground=[130.724 5.762 -30.786] rpy_ground=[0.10620 0.40561 0.10225][0m
+[node-1] [0m[INFO] [1777637562.400531476] [GALOnode]: IMU delta | rpy=[0.00116 0.00096 0.00001][0m
+[node-1] [0m[INFO] [1777637562.903615989] [GALOnode]: GALO pose | t=[132.658 5.838 -31.346] | delta=[0.450 0.432 0.934] | dist_xy=132.786 dz=-31.346[0m
+[node-1] [0m[INFO] [1777637562.903661391] [GALOnode]: Ground result | valid=1 matches=18 mean_abs_res=0.0879 t_ground=[132.658 5.838 -31.423] rpy_ground=[0.12845 0.41087 0.12729][0m
+[node-1] [0m[INFO] [1777637562.903675006] [GALOnode]: IMU delta | rpy=[0.00141 0.00092 0.00000][0m
+[node-1] [0m[INFO] [1777637563.105723932] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 3, objects_extration - 1, ground_extration - 9, planar_registration - 38, ground_registration - 1[0m
+[node-1] [0m[INFO] [1777637563.416700153] [GALOnode]: GALO pose | t=[134.484 6.045 -32.117] | delta=[0.575 0.091 0.810] | dist_xy=134.620 dz=-32.117[0m
+[node-1] [0m[INFO] [1777637563.416743071] [GALOnode]: Ground result | valid=1 matches=20 mean_abs_res=0.0878 t_ground=[134.484 6.045 -32.156] rpy_ground=[0.13491 0.40923 0.13434][0m
+[node-1] [0m[INFO] [1777637563.416756551] [GALOnode]: IMU delta | rpy=[0.00205 0.00012 0.00001][0m
+[node-1] [0m[INFO] [1777637564.000216411] [GALOnode]: GALO pose | t=[136.629 6.314 -32.783] | delta=[0.318 -0.059 -0.402] | dist_xy=136.775 dz=-32.783[0m
+[node-1] [0m[INFO] [1777637564.000260769] [GALOnode]: Ground result | valid=1 matches=18 mean_abs_res=0.1216 t_ground=[136.629 6.314 -33.035] rpy_ground=[0.15187 0.42287 0.13413][0m
+[node-1] [0m[INFO] [1777637564.000275436] [GALOnode]: IMU delta | rpy=[0.00245 0.00116 -0.00002][0m
+[node-1] [0m[INFO] [1777637564.502812802] [GALOnode]: GALO pose | t=[138.660 6.560 -33.819] | delta=[0.426 -0.206 -0.189] | dist_xy=138.815 dz=-33.819[0m
+[node-1] [0m[INFO] [1777637564.502855196] [GALOnode]: Ground result | valid=1 matches=15 mean_abs_res=0.1357 t_ground=[138.660 6.560 -33.939] rpy_ground=[0.15744 0.42217 0.13875][0m
+[node-1] [0m[INFO] [1777637564.502867886] [GALOnode]: IMU delta | rpy=[0.00231 0.00046 -0.00000][0m
+[node-1] [0m[INFO] [1777637565.096536856] [GALOnode]: GALO pose | t=[141.131 6.862 -34.859] | delta=[0.094 0.273 -1.303] | dist_xy=141.297 dz=-34.859[0m
+[node-1] [0m[INFO] [1777637565.096604453] [GALOnode]: Ground result | valid=1 matches=16 mean_abs_res=0.0948 t_ground=[141.131 6.862 -35.016] rpy_ground=[0.16450 0.38852 0.14235][0m
+[node-1] [0m[INFO] [1777637565.096620840] [GALOnode]: IMU delta | rpy=[0.00144 -0.00073 0.00005][0m
+[node-1] [0m[INFO] [1777637565.195269381] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 3, objects_extration - 1, ground_extration - 8, planar_registration - 28, ground_registration - 1[0m
+[node-1] [0m[INFO] [1777637565.597108714] [GALOnode]: GALO pose | t=[142.576 7.170 -35.476] | delta=[0.485 0.191 0.773] | dist_xy=142.756 dz=-35.476[0m
+[node-1] [0m[INFO] [1777637565.597167012] [GALOnode]: Ground result | valid=1 matches=18 mean_abs_res=0.1635 t_ground=[142.576 7.170 -35.499] rpy_ground=[0.17302 0.37181 0.13794][0m
+[node-1] [0m[INFO] [1777637565.597181848] [GALOnode]: IMU delta | rpy=[0.00022 -0.00063 0.00004][0m
+[node-1] [0m[INFO] [1777637566.194196315] [GALOnode]: GALO pose | t=[145.289 7.659 -36.470] | delta=[0.600 -0.014 0.574] | dist_xy=145.490 dz=-36.470[0m
+[node-1] [0m[INFO] [1777637566.194259086] [GALOnode]: Ground result | valid=1 matches=21 mean_abs_res=0.1175 t_ground=[145.289 7.659 -36.549] rpy_ground=[0.15662 0.36265 0.13337][0m
+[node-1] [0m[INFO] [1777637566.194275980] [GALOnode]: IMU delta | rpy=[-0.00197 -0.00049 0.00001][0m
+[node-1] [0m[INFO] [1777637566.695014397] [GALOnode]: GALO pose | t=[147.499 8.007 -37.071] | delta=[0.860 0.628 1.537] | dist_xy=147.716 dz=-37.071[0m
+[node-1] [0m[INFO] [1777637566.695077606] [GALOnode]: Ground result | valid=1 matches=13 mean_abs_res=0.2068 t_ground=[147.499 8.007 -37.271] rpy_ground=[0.16282 0.37307 0.13884][0m
+[node-1] [0m[INFO] [1777637566.695094039] [GALOnode]: IMU delta | rpy=[-0.00194 -0.00022 -0.00000][0m
+[node-1] [0m[INFO] [1777637567.290655743] [GALOnode]: GALO pose | t=[150.430 8.464 -38.148] | delta=[0.210 0.590 -0.262] | dist_xy=150.668 dz=-38.148[0m
+[node-1] [0m[INFO] [1777637567.290723592] [GALOnode]: Ground result | valid=1 matches=15 mean_abs_res=0.1888 t_ground=[150.430 8.464 -38.204] rpy_ground=[0.14955 0.36376 0.13771][0m
+[node-1] [0m[INFO] [1777637567.290739513] [GALOnode]: IMU delta | rpy=[0.00094 -0.00060 0.00003][0m
+[node-1] [0m[INFO] [1777637567.290971316] [GALOnode]: Time measurments (ms): deskew - 2, segmentaion - 3, objects_extration - 1, ground_extration - 8, planar_registration - 31, ground_registration - 1[0m
+[node-1] [0m[INFO] [1777637567.795724972] [GALOnode]: GALO pose | t=[152.590 8.823 -38.816] | delta=[0.241 -0.161 -1.086] | dist_xy=152.845 dz=-38.816[0m
+[node-1] [0m[INFO] [1777637567.795782876] [GALOnode]: Ground result | valid=1 matches=19 mean_abs_res=0.1905 t_ground=[152.590 8.823 -38.901] rpy_ground=[0.15977 0.35225 0.13254][0m
+[node-1] [0m[INFO] [1777637567.795799758] [GALOnode]: IMU delta | rpy=[0.00079 0.00015 -0.00000][0m
+[node-1] [0m[INFO] [1777637568.296824341] [GALOnode]: GALO pose | t=[154.765 9.192 -39.543] | delta=[0.896 0.374 1.668] | dist_xy=155.038 dz=-39.543[0m
+[node-1] [0m[INFO] [1777637568.296892084] [GALOnode]: Ground result | valid=1 matches=21 mean_abs_res=0.1620 t_ground=[154.765 9.192 -39.594] rpy_ground=[0.16426 0.34497 0.13418][0m
+[node-1] [0m[INFO] [1777637568.296909641] [GALOnode]: IMU delta | rpy=[0.00020 0.00123 -0.00005][0m
+[node-1] [0m[INFO] [1777637568.802378531] [GALOnode]: GALO pose | t=[157.012 9.608 -39.926] | delta=[0.086 -0.321 -1.920] | dist_xy=157.305 dz=-39.926[0m
+[node-1] [0m[INFO] [1777637568.802423214] [GALOnode]: Ground result | valid=1 matches=21 mean_abs_res=0.0966 t_ground=[157.012 9.608 -40.044] rpy_ground=[0.15210 0.34949 0.12691][0m
+[node-1] [0m[INFO] [1777637568.802436050] [GALOnode]: IMU delta | rpy=[-0.00026 0.00025 -0.00001][0m
+[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)
+[node-1] [0m[INFO] [1777637572.565499871] [rclcpp]: signal_handler(SIGINT/SIGTERM)[0m
+[INFO] [node-1]: process has finished cleanly [pid 1932705]

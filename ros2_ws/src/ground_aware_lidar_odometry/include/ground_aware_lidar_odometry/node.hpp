@@ -19,6 +19,7 @@
 struct GALONodeParams {
   int debug = 1;
   int max_ground_map_frames_ = 10;
+  int max_planar_map_frames_ = 10;
 };
 
 struct ImuOrientationStamped {
@@ -58,7 +59,6 @@ class GALONode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr translation_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr eulers_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr imu_eulers_pub_;
-  std::deque<std::vector<GroundPatch>> ground_map_frames_;
   Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
   Eigen::Vector3d t_map_lidar_ = Eigen::Vector3d::Zero();
   Eigen::Quaterniond imu_q_prev_, q_il, imu_q_lidar_prev_;
@@ -70,7 +70,9 @@ class GALONode : public rclcpp::Node {
   GroundRegistration ground_registration_;
   PlanarRegistration planar_registration_;
   std::vector<TimeMeasurments_t> time_measurments;
+  std::deque<std::vector<GroundPatch>> ground_map_frames_;
   std::vector<GroundPatch> ground_map_;
+  std::deque<std::vector<Eigen::Vector2d>> objects_map_frames_;
   std::vector<Eigen::Vector2d> objects_map_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -86,7 +88,11 @@ class GALONode : public rclcpp::Node {
   std::vector<GroundPatch> TransformPatchesToMap(
       const std::vector<GroundPatch>& patches, const Eigen::Matrix3d& R,
       const Eigen::Vector3d& t);
+  std::vector<Eigen::Vector2d> TransformPointsToMap(
+      const std::vector<Eigen::Vector2d>& points, const Eigen::Matrix3d& R,
+      const Eigen::Vector3d& t);
   void RebuildGroundMap();
+  void RebuildObjectsMap();
   Eigen::Vector3d MergeGroundAndPlanarTranslation(
       const Eigen::Vector3d& t_ground, const Eigen::Vector2d& t_planar);
 

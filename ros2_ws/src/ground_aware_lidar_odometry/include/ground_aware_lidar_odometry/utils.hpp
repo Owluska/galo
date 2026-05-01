@@ -1,4 +1,5 @@
 #pragma once
+#include <Eigen/Dense>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -50,3 +51,5 @@ class FiniteDeque {
   size_t size_;
   std::deque<T> queue_;
 };
+
+std::string VectorToString(const Eigen::VectorXd& vec);
