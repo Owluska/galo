@@ -1,0 +1,3 @@
+std_msgs/Header header
+string unload_type
+builtin_interfaces/Time unloading_time

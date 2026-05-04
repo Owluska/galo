@@ -1,0 +1,9 @@
+std_msgs/Header header
+string source
+uint64 points_left
+float64 distance_left
+int32 cur_action_seq
+int32 first_locked_action_seq
+int32 last_locked_action_seq
+int32 last_action_seq
+int32 plan_array_len

@@ -1,0 +1,12 @@
+std_msgs/Header header
+float32 wheel_angle
+uint8 steer_intensity
+uint8 brake_intensity
+uint8 parking_brake
+uint8 loading_brake
+uint8 emergency_brake_front
+uint8 emergency_brake_rear
+uint8 counter
+uint8 robo_mode
+uint8 reset_error
+uint8 checksum

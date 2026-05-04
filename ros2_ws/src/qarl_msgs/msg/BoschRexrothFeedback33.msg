@@ -1,0 +1,8 @@
+std_msgs/Header header
+bool robo_mode
+bool crash_stop
+bool parking_brakes_button
+bool interception_from_cabin
+uint8 active_controller
+bool delay_failure_mode
+bool reserve_mode

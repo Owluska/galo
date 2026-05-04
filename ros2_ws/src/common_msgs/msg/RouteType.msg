@@ -1,0 +1,17 @@
+int8 area_type
+float64 speed_directon
+int8 route_type
+
+int8 AREA_TYPE_UNKNOWN = -1
+int8 AREA_TYPE_LOAD = 0
+int8 AREA_TYPE_UNLOAD = 1
+int8 AREA_TYPE_ROAD = 2
+int8 AREA_TYPE_CROSSROAD = 3
+int8 AREA_TYPE_PARKING = 4
+
+
+int8 ROUTE_TYPE_PLAN = 1
+int8 ROUTE_TYPE_MANEUVER = 2
+int8 ROUTE_TYPE_NO_ROUTE = 0
+
+

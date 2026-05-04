@@ -1,0 +1,2 @@
+uint32 quality
+uint32 satellites_number

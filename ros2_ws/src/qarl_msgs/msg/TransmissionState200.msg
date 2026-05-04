@@ -1,0 +1,13 @@
+std_msgs/Header header
+bool robo_mode
+bool stabilize
+bool interception_from_cabin
+bool normal_mode
+bool reserve_mode
+bool critical_error
+bool warning
+bool error
+uint8 gear
+uint8 accel
+uint8 dyn_brakes
+float32 speed

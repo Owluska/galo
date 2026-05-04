@@ -1,0 +1,8 @@
+std_msgs/Header header
+float32 wheel_angle
+uint8 helm_position
+uint8 steering_pressure
+uint8 brakes_pressure
+uint8 parking_pressure
+uint8 braking_pedal_state
+uint8 pha_pressure

@@ -1,0 +1,9 @@
+std_msgs/Header header
+string name
+bool is_loading_required
+float32 x
+float32 y
+float32 yaw
+float32 width
+float32 length
+float32 height

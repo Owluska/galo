@@ -37,14 +37,14 @@ struct GroundSegmentationParams {
   int min_points_per_cell = 5;
 };
 struct GroundPatchParams {
-  double cell_size = 2.5;
-  int min_points = 15;
-  double max_thickness = 0.20;
-  double min_normal_z = 0.85;  // ~30° slope
-  double min_planarity = 0.05;
+  double cell_size = 5.0;
+  int min_points = 30;
+  double max_thickness = 0.2;
+  double min_normal_z = 0.90;  // ~30° slope
+  double min_planarity = 0.4;
 };
 struct GroundRegistrationParams {
-  double max_match_distance = 5.0;
+  double max_match_distance = 2.0;
   double min_normal_dot = 0.85;
   int max_iterations = 5;
   int min_matches = 2;
@@ -63,10 +63,10 @@ struct GroundRegistrationParams {
 };
 
 struct PlanarRegistrationParams {
-  double voxel_size = 0.5;  // m
+  double voxel_size = 1.0;  // m
   double max_match_distance = 1.0;
-  int min_points_per_voxel = 3;
-  int max_iterations = 10;
+  int min_points_per_voxel = 8;
+  int max_iterations = 15;
   int min_matches = 20;
   double damping = 1e-4;
 
@@ -74,9 +74,9 @@ struct PlanarRegistrationParams {
   double max_dy = 1.0;
   double max_dyaw = 0.2;
 
-  double max_dx_step = 0.2;
-  double max_dy_step = 0.2;
-  double max_dyaw_step = 0.05;
+  double max_dx_step = 0.5;
+  double max_dy_step = 0.5;
+  double max_dyaw_step = 0.1;
 
   double convergence_eps = 1e-5;
 };

@@ -1,0 +1,7 @@
+std_msgs/Header header
+
+common_msgs/SensorQualityData gnss_quality
+common_msgs/SensorQualityData imu_quality
+common_msgs/SensorQualityData odometry_quality
+common_msgs/SensorQualityData wangle_quality
+

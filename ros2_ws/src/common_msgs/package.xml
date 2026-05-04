@@ -1,20 +1,24 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>user_msgs</name>
-  <version>0.0.1</version>
-  <description>Custom interfaces for ground aware lidar odometry</description>
-  <maintainer email="you@example.com">Your Name</maintainer>
-  <license>Apache-2.0</license>
+  <name>common_msgs</name>
+  <version>0.0.0</version>
+  <description>The common_msgs package</description>
+
+  <maintainer email="root@todo.todo">root</maintainer>
+  <license>TODO</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <build_depend>rosidl_default_generators</build_depend>
-  
-  <depend>std_msgs</depend>
-  <depend>geometry_msgs</depend>
-  
-  <depend>builtin_interfaces</depend>
 
+  <build_depend>rosidl_default_generators</build_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
 
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>builtin_interfaces</depend>
+
   <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
 </package>

@@ -22,6 +22,13 @@ GALONode::GALONode(const GALONodeParams& node_params)
   imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
       "/Sensor/imu_front/data", 1,
       std::bind(&GALONode::ImuCb, this, std::placeholders::_1));
+  gnss_sub_ = this->create_subscription<qarl_msgs::msg::NmeaGGA>(
+      "/Sensor/gnss/trimble_nmea_gga", 1,
+      std::bind(&GALONode::GnssCb, this, std::placeholders::_1));
+  gnss_orientation_sub_ =
+      this->create_subscription<qarl_msgs::msg::OrientationStamped>(
+          "/Sensor/gnss/orientation", 1,
+          std::bind(&GALONode::GnssYawCb, this, std::placeholders::_1));
 
   deskew_cld_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/GALO/deskewed_cloud", 1);
@@ -36,6 +43,11 @@ GALONode::GALONode(const GALONodeParams& node_params)
       this->create_publisher<geometry_msgs::msg::Point>("/GALO/eulers", 1);
   imu_eulers_pub_ =
       this->create_publisher<geometry_msgs::msg::Point>("/GALO/imu_eulers", 1);
+
+  gnss_imu_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/GALO/true_pose", 1);
+  lidar_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/GALO/estimate_pose", 1);
 }
 
 bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
@@ -60,6 +72,70 @@ bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
     RCLCPP_WARN(this->get_logger(), "Failed to get TF %s <- %s: %s",
                 imu_frame.c_str(), lidar_frame.c_str(), ex.what());
     return false;
+  }
+}
+
+void GALONode::GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg) {
+  if (msg->gps_qual < 4) return;
+  double utm_x = 0.0;
+  double utm_y = 0.0;
+  std::string utm_zone;
+
+  robot_localization::navsat_conversions::LLtoUTM(msg->lat, msg->lon, utm_y,
+                                                  utm_x, utm_zone);
+  double northing = 0.0;
+  double easting = 0.0;
+  std::string zone;
+
+  robot_localization::navsat_conversions::LLtoUTM(msg->lat, msg->lon, northing,
+                                                  easting, zone);
+
+  Eigen::Vector3d gnss_utm(easting, northing, msg->altitude);
+
+  if (!gnss_data_.has_gnss_origin_) {
+    gnss_data_.gnss_origin_ = gnss_utm;
+    gnss_data_.has_gnss_origin_ = true;
+  }
+
+  gnss_data_.gnss_local_ = gnss_utm - gnss_data_.gnss_origin_;
+}
+void GALONode::GnssYawCb(
+    const qarl_msgs::msg::OrientationStamped::SharedPtr msg) {
+  if (GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame) &&
+      imu_orientation_queue_.Size() >= 2 && gnss_data_.has_gnss_origin_) {
+    double gnss_time = rclcpp::Time(msg->header.stamp).seconds();
+
+    std::optional<Eigen::Quaterniond> q_lidar;
+    {
+      std::lock_guard<std::mutex> lock(mut_);
+      q_lidar = GetImuOrientationAt(gnss_time);
+    }
+
+    if (!q_lidar) {
+      PrintTimeMeasurments(time_measurments);
+      return;
+    }
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.frame_id = "gnss_map";
+    pose_msg.pose.position.x = gnss_data_.gnss_local_.x();
+    pose_msg.pose.position.y = gnss_data_.gnss_local_.y();
+    pose_msg.pose.position.z = gnss_data_.gnss_local_.z();
+
+    double heading_deg = msg->orientation.yaw;
+    double heading_rad = heading_deg * M_PI / 180.0;
+
+    // Trimble: clockwise from North
+    // ROS ENU: counter-clockwise from East
+    double yaw_enu = M_PI / 2.0 - heading_rad;
+
+    // normalize to [-pi, pi]
+    yaw_enu = std::atan2(std::sin(yaw_enu), std::cos(yaw_enu));
+
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, yaw_enu);
+    q.normalize();
+    pose_msg.pose.orientation = tf2::toMsg(q);
+    gnss_imu_pose_pub_->publish(pose_msg);
   }
 }
 
@@ -149,11 +225,19 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
       PrintTimeMeasurments(time_measurments);
       return;
     }
-
+    // IMU relative rotation between previous and current LiDAR scan timestamps.
+    // With q = R_world_imu / R_map_imu style body-to-world orientation,
+    // R_prev.transpose() * R_curr maps vectors from current IMU frame to
+    // previous IMU frame.
     Eigen::Matrix3d R_imu_delta_lidar =
         imu_q_lidar_prev_.toRotationMatrix().transpose() *
         q_lidar->toRotationMatrix();
+    // Static extrinsic rotation between LiDAR and IMU frames.
+    // q_il comes from lookupTransform(imu_frame, lidar_frame), so R_ex maps:
+    // lidar frame -> imu frame.
     Eigen::Matrix3d R_ex = q_il.toRotationMatrix();
+    // Convert IMU-frame delta into LiDAR-frame delta.
+    // Result maps current LiDAR frame -> previous LiDAR frame.
     Eigen::Matrix3d R_lidar_delta = R_ex.transpose() * R_imu_delta_lidar * R_ex;
     imu_q_lidar_prev_ = *q_lidar;
 
@@ -187,19 +271,7 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
       meas.SetEnd();
       time_measurments.push_back(meas);
     }
-    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-    //                      "Reg debug | "
-    //                      "ground: valid=%d matches=%d mean_abs_res=%.4f | "
-    //                      "planar: valid=%d matches=%d mean_res=%.4f | "
-    //                      "map sizes: ground=%zu objects=%zu | "
-    //                      "cur sizes: ground=%zu objects=%zu",
-    //                      ground_reg_result.valid,
-    //                      ground_reg_result.num_matches,
-    //                      ground_reg_result.mean_abs_residual,
-    //                      planar_reg_res.valid, planar_reg_res.matches,
-    //                      planar_reg_res.mean_residual, ground_map_.size(),
-    //                      objects_map_.size(), cur_patches.size(),
-    //                      cur_planar_points.size());
+
     if (ground_reg_result.valid && planar_reg_res.valid) {
       Eigen::Matrix3d R_map_lidar_prev = R_map_lidar_;
       Eigen::Vector3d t_map_lidar_prev = t_map_lidar_;
@@ -216,18 +288,6 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
       double planar_yaw =
           std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
 
-      // RCLCPP_INFO_THROTTLE(
-      //     this->get_logger(), *this->get_clock(), 500,
-      //     "Pose debug | "
-      //     "ground_rpy=[%.5f %.5f %.5f] planar_yaw=%.5f | "
-      //     "abs_rpy=[%.5f %.5f %.5f] | "
-      //     "ground_t=[%.3f %.3f %.3f] planar_t=[%.3f %.3f] abs_t=[%.3f %.3f "
-      //     "%.3f]",
-      //     roll_ground, pitch_ground, yaw_ground, planar_yaw, roll_abs,
-      //     pitch_abs, yaw_abs, ground_reg_result.t.x(),
-      //     ground_reg_result.t.y(), ground_reg_result.t.z(),
-      //     planar_reg_res.t.x(), planar_reg_res.t.y(), t_abs.x(), t_abs.y(),
-      //     t_abs.z());
       Eigen::Matrix3d R_debug_delta = R_abs * R_map_lidar_prev.transpose();
       Eigen::Vector3d t_debug_delta = t_abs - R_debug_delta * t_map_lidar_prev;
       if (node_params_.debug) {

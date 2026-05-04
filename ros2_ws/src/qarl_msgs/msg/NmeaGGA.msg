@@ -1,0 +1,15 @@
+std_msgs/Header header
+string timestamp
+float64 lat
+string lat_dir
+float64 lon
+string lon_dir
+int32 gps_qual
+int32 num_sats
+float32 horizontal_dil
+float32 altitude
+string altitude_units
+float32 geo_sep
+string geo_sep_units
+float32 age_gps_data
+string ref_station_id

@@ -1,0 +1,7 @@
+std_msgs/Header header
+common_msgs/Header info
+int32 cur_action_seq
+int32 first_locked_action_seq
+int32 last_locked_action_seq
+int32 last_action_seq
+bool ready_for_transition

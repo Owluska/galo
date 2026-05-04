@@ -1,0 +1,5 @@
+geometry_msgs/Point local_pose
+float32 target_speed
+float32 proximity_slowdown_speed
+float32 road_roughness
+string regime

@@ -1,0 +1,11 @@
+common_msgs/VehicleStatus vehicle_status
+common_msgs/Events active_errors
+common_msgs/TransmissionContactorsFeedback transmission_contactors
+common_msgs/RemoteState state
+common_msgs/PlannedRoute route
+common_msgs/Float32MultiArrayExtended diagnostics
+common_msgs/PlannedRoute heights
+common_msgs/CloseObjects close_objects
+common_msgs/Marker own_corridor
+common_msgs/MarkerArray obst_corridors
+common_msgs/PlannedRouteArray stamped_route

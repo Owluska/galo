@@ -442,6 +442,7 @@ GroundRegistrationResult GroundRegistration::Align(
     const std::vector<GroundPatch>& current, const Eigen::Matrix3d& R_imu_prior,
     const Eigen::Matrix3d& R_initial, const Eigen::Vector3d& t_initial) const {
   GroundRegistrationResult result;
+
   if (current.empty() || map.empty()) {
     RCLCPP_WARN(logger_,
                 "GroundRegistration::Align: either map or current patches are "
@@ -449,6 +450,21 @@ GroundRegistrationResult GroundRegistration::Align(
                 current.size(), map.size());
     return result;
   }
+
+  // ------------------------------------------------------------
+  // Build KD-tree for map patch centroids.
+  //
+  // `map` patches are already expressed in the global/map frame.
+  // The KD-tree is therefore queried in the map frame.
+  //
+  // Note:
+  //   z is intentionally set to 0.0 here.
+  //
+  // This makes matching mostly XY-based. That is usually better for ground
+  // patches because the optimizer itself estimates z, roll, and pitch using
+  // point-to-plane residuals. If z were included in nearest-neighbor search,
+  // a bad initial z could cause wrong correspondences.
+  // ------------------------------------------------------------
   pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(
       new pcl::PointCloud<pcl::PointXYZ>());
 
@@ -468,6 +484,28 @@ GroundRegistrationResult GroundRegistration::Align(
 
   pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
   kdtree.setInputCloud(map_cloud);
+
+  // ------------------------------------------------------------
+  // Transform estimated by this function:
+  //
+  //   p_map = R * p_current + t
+  //
+  // where:
+  //   p_current is a ground patch centroid in the current LiDAR frame,
+  //   p_map     is the same patch centroid expressed in the map frame.
+  //
+  // R_initial and t_initial should be the current best estimate of:
+  //
+  //   map <- current_lidar
+  //
+  // Usually this is the previous global pose.
+  //
+  // This optimizer only changes:
+  //
+  //   state = [dz, droll, dpitch]
+  //
+  // It does not estimate x, y, or yaw. Those come from planar registration.
+  // ------------------------------------------------------------
   Eigen::Matrix3d R = R_initial;
   Eigen::Vector3d t = t_initial;
 
@@ -475,21 +513,48 @@ GroundRegistrationResult GroundRegistration::Align(
   double final_abs_residual_sum = 0.0;
 
   for (int iter = 0; iter < params_.max_iterations; ++iter) {
+    // Normal equation system:
+    //
+    //   H * dx = -b
+    //
+    // State increment:
+    //
+    //   dx = [dz, droll, dpitch]
+    //
+    // dz is a map-frame vertical translation correction.
+    // droll and dpitch are local/current LiDAR-frame rotation corrections
+    // because we use a right SO(3) update:
+    //
+    //   R_new = R * Exp([droll, dpitch, 0])
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
 
     int num_matches = 0;
     double abs_residual_sum = 0.0;
 
+    // Track XY coverage of matched transformed current patches.
+    //
+    // Roll/pitch are poorly observable if matched ground patches occupy only a
+    // narrow strip. These spans are later used to optionally suppress unstable
+    // roll/pitch updates when IMU prior is disabled.
     double min_x = std::numeric_limits<double>::infinity();
     double max_x = -std::numeric_limits<double>::infinity();
     double min_y = std::numeric_limits<double>::infinity();
     double max_y = -std::numeric_limits<double>::infinity();
 
     for (const auto& cur : current) {
+      // Transform current patch centroid and normal into map frame:
+      //
+      //   p          = R * cur.centroid + t
+      //   cur_normal = R * cur.normal
+      //
+      // Both are used for correspondence search.
       Eigen::Vector3d p = R * cur.centroid + t;
       Eigen::Vector3d cur_normal = R * cur.normal;
 
+      // Find nearest map patch in map frame.
+      //
+      // The search uses transformed XY position and checks normal consistency.
       int match_idx = FindNearestPatchKDTree(p, cur_normal, map, kdtree);
       if (match_idx < 0) {
         continue;
@@ -504,33 +569,95 @@ GroundRegistrationResult GroundRegistration::Align(
       const Eigen::Vector3d& q = mp.centroid;
       const Eigen::Vector3d& n = mp.normal;
 
+      // Point-to-plane residual in map frame:
+      //
+      //   r = n_map^T * (p_current_in_map - q_map)
+      //
+      // where:
+      //   n is the matched map patch normal,
+      //   q is the matched map patch centroid.
+      //
+      // Positive/negative sign is okay as long as the Jacobian uses the same
+      // convention, because the update solves dx = -H^-1 b.
       double r = n.dot(p - q);
 
+      // Translation part of the Jacobian.
+      //
+      // This optimizer only updates z:
+      //
+      //   p_new = p + [0, 0, dz]
+      //
+      // Therefore:
+      //
+      //   dr / dz = n.z
       double J_dz = n.z();
 
+      // Rotation part of the Jacobian for right perturbation.
+      //
+      // Current transform:
+      //
+      //   p = R * cur.centroid + t
+      //
+      // Right SO(3) update:
+      //
+      //   R_new = R * Exp(dtheta)
+      //
+      // For small dtheta:
+      //
+      //   Exp(dtheta) * cur ≈ cur + dtheta x cur
+      //                    ≈ cur - skew(cur) * dtheta
+      //
+      // Therefore:
+      //
+      //   dp / dtheta = -R * skew(cur)
+      //
+      // Residual:
+      //
+      //   r = n^T * p
+      //
+      // so:
+      //
+      //   dr / dtheta = n^T * dp/dtheta
+      //                = -n^T * R * skew(cur)
+      //
+      // We keep only roll and pitch components. Yaw is intentionally not
+      // optimized here because yaw comes from planar registration.
       Eigen::Matrix3d cur_skew = Skew(cur.centroid);
-
-      // Right perturbation:
-      // p = R * cur + t
-      // R_new = R * Exp(dtheta)
-      // dp / dtheta = -R * skew(cur)
       Eigen::RowVector3d J_rot = -n.transpose() * R * cur_skew;
 
       double J_roll = J_rot.x();
       double J_pitch = J_rot.y();
 
+      // State order:
+      //
+      //   dx = [dz, droll, dpitch]
       Eigen::Vector3d J;
       J << J_dz, J_roll, J_pitch;
 
+      // Patch weight.
+      //
+      // Start with support-based patch weight. If it is invalid, fall back
+      // to 1.
       double weight = cur.weight;
       if (!std::isfinite(weight) || weight <= 0.0) {
         weight = 1.0;
       }
 
+      // Down-weight far patches.
+      //
+      // Far ground patches often have larger noise and less reliable normals.
       double range = cur.centroid.head<2>().norm();
       double range_weight = 1.0 / (1.0 + 0.005 * range * range);
       weight *= range_weight;
 
+      // Accumulate weighted normal equations:
+      //
+      //   H += w * J * J^T
+      //   b += w * J * r
+      //
+      // Later:
+      //
+      //   dx = -H^-1 * b
       H += weight * J * J.transpose();
       b += weight * J * r;
 
@@ -546,17 +673,47 @@ GroundRegistrationResult GroundRegistration::Align(
       return result;
     }
 
-    // IMU SO(3) prior:
-    // R should stay close to absolute IMU-predicted map<-lidar rotation.
-    // R_err = R_imu_delta^T * R
-    // log(R_err) is angular error in radians.
+    // ------------------------------------------------------------
+    // IMU SO(3) prior.
+    //
+    // R_imu_prior is the IMU-predicted absolute rotation:
+    //
+    //   map <- current_lidar
+    //
+    // The optimized R should stay close to this prior, especially in roll and
+    // pitch. This helps because ground-only geometry can be weak or degenerate.
+    //
+    // Rotation error:
+    //
+    //   R_err = R_imu_prior^T * R
+    //
+    // If R == R_imu_prior, then R_err is identity and LogSO3(R_err) is zero.
+    //
+    // rot_err is approximately:
+    //
+    //   [roll_error, pitch_error, yaw_error]
+    //
+    // for small errors.
+    //
+    // We constrain roll and pitch only. Yaw is ignored here because yaw is
+    // estimated by planar registration.
+    // ------------------------------------------------------------
     if (params_.use_imu_prior) {
       Eigen::Matrix3d R_err = R_imu_prior.transpose() * R;
       Eigen::Vector3d rot_err = LogSO3(R_err);
 
-      // State is [dz, roll, pitch].
-      // We constrain roll and pitch only.
       {
+        // Residual:
+        //
+        //   r_roll = roll error between current R and IMU prior
+        //
+        // State:
+        //
+        //   dx = [dz, droll, dpitch]
+        //
+        // Jacobian:
+        //
+        //   dr_roll / droll = 1
         double r_roll = rot_err.x();
         Eigen::Vector3d J;
         J << 0.0, 1.0, 0.0;
@@ -566,6 +723,13 @@ GroundRegistrationResult GroundRegistration::Align(
       }
 
       {
+        // Residual:
+        //
+        //   r_pitch = pitch error between current R and IMU prior
+        //
+        // Jacobian:
+        //
+        //   dr_pitch / dpitch = 1
         double r_pitch = rot_err.y();
         Eigen::Vector3d J;
         J << 0.0, 0.0, 1.0;
@@ -575,6 +739,17 @@ GroundRegistrationResult GroundRegistration::Align(
       }
     }
 
+    // Check conditioning of the ground registration system.
+    //
+    // Ground-only constraints can become degenerate, for example:
+    //   - almost flat ground everywhere,
+    //   - too small XY patch coverage,
+    //   - narrow strip of visible ground,
+    //   - bad or repetitive correspondences.
+    //
+    // If IMU prior is enabled, we usually let the prior stabilize roll/pitch.
+    // If IMU prior is disabled, degenerate roll/pitch updates are suppressed
+    // below.
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(H);
     Eigen::Vector3d evals = es.eigenvalues();
 
@@ -583,11 +758,20 @@ GroundRegistrationResult GroundRegistration::Align(
     double condition = lambda_max / std::max(lambda_min, 1e-9);
     bool degenerate = lambda_min < 1e-4 || condition > 1e6;
 
+    // Add separate damping for z, roll, and pitch.
+    //
+    // This improves numerical stability and also lets you tune how much each
+    // component is allowed to move.
     Eigen::Matrix3d H_damped = H;
     H_damped(0, 0) += params_.damping_z;
     H_damped(1, 1) += params_.damping_roll;
     H_damped(2, 2) += params_.damping_pitch;
 
+    // Solve Gauss-Newton step:
+    //
+    //   dx = -H^-1 * b
+    //
+    // dx = [dz, droll, dpitch]
     Eigen::Vector3d dx = -H_damped.ldlt().solve(b);
 
     if (!dx.allFinite()) {
@@ -599,27 +783,51 @@ GroundRegistrationResult GroundRegistration::Align(
     double x_span = max_x - min_x;
     double y_span = max_y - min_y;
 
+    // If there is no IMU prior and the system is degenerate, suppress
+    // roll/pitch. Otherwise ground registration can invent tilt from weak
+    // correspondences.
     if (!params_.use_imu_prior && degenerate) {
       dx(1) = 0.0;
       dx(2) = 0.0;
     }
 
+    // Pitch needs enough x-direction coverage.
+    //
+    // Intuition:
+    //   pitch changes height as a function of x.
+    //   If x coverage is small, pitch is weakly observable.
     if (x_span < params_.min_x_span_for_pitch && !params_.use_imu_prior) {
       dx(2) = 0.0;
     }
 
+    // Roll needs enough y-direction coverage.
+    //
+    // Intuition:
+    //   roll changes height as a function of y.
+    //   If y coverage is small, roll is weakly observable.
     if (y_span < params_.min_y_span_for_roll && !params_.use_imu_prior) {
       dx(1) = 0.0;
     }
 
+    // Limit per-iteration step size.
+    //
+    // The final correction can still be larger after several iterations, but no
+    // single iteration can make a dangerous jump.
     dx(0) = std::clamp(dx(0), -params_.max_dz, params_.max_dz);
     dx(1) = std::clamp(dx(1), -params_.max_roll, params_.max_roll);
     dx(2) = std::clamp(dx(2), -params_.max_pitch, params_.max_pitch);
 
+    // Apply z correction in map frame.
+    //
+    // This optimizer does not update x/y translation.
     t.z() += dx(0);
 
+    // Apply right SO(3) update for local/body-frame roll-pitch correction.
+    //
+    //   R_new = R * Exp([droll, dpitch, 0])
+    //
+    // Yaw correction is zero because yaw is handled by planar registration.
     Eigen::Vector3d dtheta(dx(1), dx(2), 0.0);
-    // Right update: local/body-frame roll-pitch correction.
     R = R * ExpSO3(dtheta);
 
     final_matches = num_matches;
@@ -629,17 +837,29 @@ GroundRegistrationResult GroundRegistration::Align(
       break;
     }
   }
+
   RCLCPP_WARN_EXPRESSION(
       logger_, final_matches < params_.min_matches,
       "GroundRegistration::Align: low amount of final matches %d %d",
       final_matches, params_.min_matches);
 
+  // Final estimated transform:
+  //
+  //   result.R, result.t : map <- current_lidar
+  //
+  // Meaning:
+  //
+  //   p_map = result.R * p_current + result.t
+  //
+  // Only z, roll, and pitch were optimized here.
+  // x, y, and yaw should be merged from planar registration.
   result.R = R;
   result.t = t;
   result.num_matches = final_matches;
   result.mean_abs_residual =
       final_matches > 0 ? final_abs_residual_sum / final_matches : 0.0;
   result.valid = final_matches >= params_.min_matches;
+
   return result;
 }
 
@@ -703,7 +923,12 @@ PlanarRegistrationResult PlanarRegistration::Align(
 
   // ------------------------------------------------------------
   // Build KD-tree for map points.
-  // Map points are fixed during this Align call.
+  //
+  // `map` points are already expressed in the global/map frame.
+  // The KD-tree is therefore queried in the map frame.
+  //
+  // The map is fixed during this Align() call, so the KD-tree is built once
+  // per call and reused for all ICP iterations.
   // ------------------------------------------------------------
   pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(
       new pcl::PointCloud<pcl::PointXYZ>());
@@ -726,7 +951,19 @@ PlanarRegistrationResult PlanarRegistration::Align(
   kdtree.setInputCloud(map_cloud);
 
   // ------------------------------------------------------------
-  // Initial transform: current -> map
+  // Transform estimated by this function:
+  //
+  //   p_map = R * p_current + t
+  //
+  // where:
+  //   p_current is a 2D point in the current LiDAR frame,
+  //   p_map     is the same point expressed in the map frame.
+  //
+  // R_initial and t_initial should therefore be the current best estimate of:
+  //
+  //   map <- current_lidar
+  //
+  // Usually this comes from the previous global pose.
   // ------------------------------------------------------------
   Eigen::Matrix2d R = R_initial;
   Eigen::Vector2d t = t_initial;
@@ -738,6 +975,19 @@ PlanarRegistrationResult PlanarRegistration::Align(
       params_.max_match_distance * params_.max_match_distance;
 
   for (int iter = 0; iter < params_.max_iterations; ++iter) {
+    // Normal equation system:
+    //
+    //   H * dx = -b
+    //
+    // State increment:
+    //
+    //   dx = [dtx, dty, dyaw]
+    //
+    // dtx, dty are map-frame translation corrections.
+    // dyaw is a local/current-frame yaw correction because we use right update:
+    //
+    //   R_new = R * dR
+    //   t_new = t + dt
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
 
@@ -745,12 +995,22 @@ PlanarRegistrationResult PlanarRegistration::Align(
     double residual_sum = 0.0;
 
     for (const auto& cur_pt : current) {
-      // Transform current point using current estimate.
+      // Transform current LiDAR-frame point into map frame using the current
+      // estimate:
+      //
+      //   p = R * cur_pt + t
+      //
+      // This transformed point is what must be matched against the map.
       Eigen::Vector2d p = R * cur_pt + t;
 
       // --------------------------------------------------------
       // KD-tree nearest-neighbor search in map frame.
-      // Important: query using transformed point p, not raw cur_pt.
+      //
+      // Important:
+      //   query = transformed point p
+      //
+      // Do not query with raw cur_pt, because cur_pt is still in the current
+      // LiDAR frame while the KD-tree stores points in the map frame.
       // --------------------------------------------------------
       pcl::PointXYZ query;
       query.x = static_cast<float>(p.x());
@@ -771,17 +1031,64 @@ PlanarRegistrationResult PlanarRegistration::Align(
       }
 
       const Eigen::Vector2d matched_pt = map[indices[0]];
+
+      // Point-to-point residual in map frame:
+      //
+      //   r = p_estimated_map - p_matched_map
+      //   r = R * cur_pt + t - matched_pt
+      //
+      // r is 2D:
+      //
+      //   r = [rx, ry]
       Eigen::Vector2d r = p - matched_pt;
+
+      // Jacobian for right yaw update.
+      //
+      // We update rotation as:
+      //
+      //   R_new = R * dR
+      //
+      // For small dyaw:
+      //
+      //   dR * cur_pt ≈ cur_pt + dyaw * [-cur_pt.y, cur_pt.x]
+      //
+      // So the local derivative is:
+      //
+      //   d(cur_pt) / d_yaw = [-cur_pt.y, cur_pt.x]
+      //
+      // Since the point is then transformed by R into the map frame:
+      //
+      //   d(p_map) / d_yaw = R * [-cur_pt.y, cur_pt.x]
       Eigen::Vector2d d_yaw_local;
       d_yaw_local << -cur_pt.y(), cur_pt.x();
 
       Eigen::Vector2d d_yaw_map = R * d_yaw_local;
 
+      // Jacobian of residual r with respect to:
+      //
+      //   dx = [dtx, dty, dyaw]
+      //
+      // Translation correction is additive in map frame:
+      //
+      //   dr / dtx = [1, 0]
+      //   dr / dty = [0, 1]
+      //
+      // Yaw correction is right-multiplied, so:
+      //
+      //   dr / dyaw = R * [-cur_pt.y, cur_pt.x]
       Eigen::Matrix<double, 2, 3> J;
       J << 1.0, 0.0, d_yaw_map.x(), 0.0, 1.0, d_yaw_map.y();
 
       double weight = 1.0;
 
+      // Accumulate weighted normal equations:
+      //
+      //   H += J^T * J
+      //   b += J^T * r
+      //
+      // Later we solve:
+      //
+      //   dx = -H^-1 * b
       H += weight * J.transpose() * J;
       b += weight * J.transpose() * r;
 
@@ -797,9 +1104,16 @@ PlanarRegistrationResult PlanarRegistration::Align(
       return result;
     }
 
+    // Add diagonal damping for numerical stability.
+    // This is similar to a simple Levenberg-Marquardt regularization.
     Eigen::Matrix3d H_damped = H;
     H_damped.diagonal().array() += params_.damping;
 
+    // Solve Gauss-Newton step:
+    //
+    //   dx = -H^-1 * b
+    //
+    // dx = [dtx, dty, dyaw]
     Eigen::Vector3d dx = -H_damped.ldlt().solve(b);
 
     if (!dx.allFinite()) {
@@ -810,6 +1124,8 @@ PlanarRegistrationResult PlanarRegistration::Align(
       return result;
     }
 
+    // Reject obviously bad optimizer jumps before applying them.
+    // This protects the map from large wrong correspondences.
     if (std::abs(dx.x()) > params_.max_dx ||
         std::abs(dx.y()) > params_.max_dy ||
         std::abs(dx.z()) > params_.max_dyaw) {
@@ -820,6 +1136,8 @@ PlanarRegistrationResult PlanarRegistration::Align(
       return result;
     }
 
+    // Limit per-iteration step size.
+    // The total correction can still be larger after several iterations.
     dx.x() = std::clamp(dx.x(), -params_.max_dx_step, params_.max_dx_step);
     dx.y() = std::clamp(dx.y(), -params_.max_dy_step, params_.max_dy_step);
     dx.z() = std::clamp(dx.z(), -params_.max_dyaw_step, params_.max_dyaw_step);
@@ -833,8 +1151,23 @@ PlanarRegistrationResult PlanarRegistration::Align(
 
     Eigen::Vector2d dt(dx.x(), dx.y());
 
-    // Right update: rotate in local/current lidar frame.
-    // Translation is an additive map-frame correction.
+    // Apply right update.
+    //
+    // Rotation:
+    //
+    //   R_new = R * dR
+    //
+    // This means dyaw is applied in the local/current LiDAR frame.
+    //
+    // Translation:
+    //
+    //   t_new = t + dt
+    //
+    // dt is additive in the map frame.
+    //
+    // This is consistent with the Jacobian above:
+    //
+    //   d(p_map) / dyaw = R * [-cur_pt.y, cur_pt.x]
     R = R * dR;
     t = t + dt;
 
@@ -846,6 +1179,13 @@ PlanarRegistrationResult PlanarRegistration::Align(
     }
   }
 
+  // Final estimated transform:
+  //
+  //   result.R, result.t : map <- current_lidar
+  //
+  // Meaning:
+  //
+  //   p_map = result.R * p_current + result.t
   result.R = R;
   result.t = t;
   result.mean_residual =

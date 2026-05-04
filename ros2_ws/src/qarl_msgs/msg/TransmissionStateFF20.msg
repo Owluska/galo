@@ -1,0 +1,6 @@
+std_msgs/Header header
+uint16 rectifier_voltage1
+uint16 rectifier_voltage2
+uint16 resistor_voltage1
+uint16 resistor_voltage2
+uint16 current

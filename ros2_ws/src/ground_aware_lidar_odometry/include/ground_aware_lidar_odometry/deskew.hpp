@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <robot_localization/navsat_conversions.hpp>
 #include <vector>
 
 #include "ground_aware_lidar_odometry/utils.hpp"

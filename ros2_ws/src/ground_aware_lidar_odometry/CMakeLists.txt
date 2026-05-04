@@ -14,14 +14,25 @@ find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(robot_localization REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(user_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
-
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(nmea_msgs REQUIRED)
+find_package(gps_msgs REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common kdtree)
 find_package(pcl_conversions REQUIRED)
+find_package(qarl_msgs REQUIRED)
+
+if(NOT GEOGRAPHICLIB_LIBRARY)
+  message(FATAL_ERROR "GeographicLib library not found")
+endif()
+
+message(STATUS "Found GeographicLib library: ${GEOGRAPHICLIB_LIBRARY}")
 
 set(LIB_SOURCES
   src/library/deskew.cpp
@@ -34,7 +45,6 @@ add_executable(node src/node.cpp ${LIB_SOURCES})
 target_include_directories(node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
-  ${PCL_INCLUDE_DIRS}
 )
 
 ament_target_dependencies(
@@ -43,17 +53,23 @@ ament_target_dependencies(
   std_msgs
   visualization_msgs
   sensor_msgs
+  nav_msgs
   geometry_msgs
   user_msgs
   tf2_ros
   tf2_sensor_msgs
+  tf2_geometry_msgs
   pcl_conversions
+  qarl_msgs
+  robot_localization
 )
 
 target_link_libraries(node
   Eigen3::Eigen
   ${PCL_LIBRARIES}
+  ${GEOGRAPHICLIB_LIB}
 )
+
 
 target_compile_definitions(node PUBLIC ${PCL_DEFINITIONS})
 

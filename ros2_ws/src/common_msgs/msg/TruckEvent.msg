@@ -1,0 +1,2 @@
+common_msgs/Event event
+common_msgs/TruckState truck_state

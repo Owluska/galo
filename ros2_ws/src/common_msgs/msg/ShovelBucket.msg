@@ -1,0 +1,14 @@
+std_msgs/Header header
+common_msgs/Header info
+builtin_interfaces/Time scoop_time
+builtin_interfaces/Time dump_time
+float32 x_scoop
+float32 y_scoop
+float32 z_scoop
+float32 x_dump
+float32 y_dump
+float32 z_dump
+float32 angle
+float32 height_diff
+float32 bucket_weight
+uint32 cycles
