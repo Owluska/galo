@@ -23,10 +23,29 @@
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
+struct GnssCovariance {
+  double x_precision = 0.03;
+  double y_precision = 0.03;
+  double z_precision = 0.03;
+  double roll_precision = 5;   // deg
+  double pitch_precision = 5;  // deg
+  double yaw_precision = 5;    // deg
+};
+
+struct LidarCovariance {
+  double base_xy = 0.1;  // 10 cm baseline
+  double z = 0.2;        // m
+  double scale = 1.0;
+  double roll = 0.5;   // rad^2
+  double pitch = 0.5;  // rad^2
+};
+
 struct GALONodeParams {
   int debug = 1;
   int max_ground_map_frames_ = 10;
   int max_planar_map_frames_ = 10;
+  GnssCovariance gt_cov_;
+  LidarCovariance est_cov_;
 };
 
 struct ImuOrientationStamped {
@@ -42,7 +61,10 @@ struct GroundPatchFrame {
 struct GnssData {
   Eigen::Vector3d gnss_origin_;
   Eigen::Vector3d gnss_local_;
-  bool has_gnss_origin_;
+  double yaw;
+  bool has_gnss_origin_ = false;
+  bool has_gnss_position_ = false;
+  bool has_gnss_yaw = false;
 };
 
 class GALONode : public rclcpp::Node {
@@ -76,13 +98,14 @@ class GALONode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr translation_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr eulers_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr imu_eulers_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       gnss_imu_pose_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr lidar_pose_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+      lidar_pose_pub_;
 
   Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
   Eigen::Vector3d t_map_lidar_ = Eigen::Vector3d::Zero();
-  Eigen::Quaterniond imu_q_prev_, q_il, imu_q_lidar_prev_;
+  Eigen::Quaterniond imu_q_prev_, q_il, q_i_map, imu_q_lidar_prev_;
   Eigen::Matrix3d R_imu_delta;
   Eigen::Vector3d t_il;
   GnssData gnss_data_;

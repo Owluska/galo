@@ -18,7 +18,6 @@ find_package(robot_localization REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(user_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -28,17 +27,16 @@ find_package(PCL REQUIRED COMPONENTS common kdtree)
 find_package(pcl_conversions REQUIRED)
 find_package(qarl_msgs REQUIRED)
 
-if(NOT GEOGRAPHICLIB_LIBRARY)
-  message(FATAL_ERROR "GeographicLib library not found")
-endif()
-
-message(STATUS "Found GeographicLib library: ${GEOGRAPHICLIB_LIBRARY}")
-
 set(LIB_SOURCES
   src/library/deskew.cpp
   src/library/segmentation.cpp
   src/library/utils.cpp
 )
+
+# Manually specify GeographicLib
+set(GEOGRAPHICLIB_LIBRARY "/usr/lib/x86_64-linux-gnu/libGeographic.so")
+add_library(GeographicLib SHARED IMPORTED)
+set_target_properties(GeographicLib PROPERTIES IMPORTED_LOCATION "${GEOGRAPHICLIB_LIBRARY}")
 
 add_executable(node src/node.cpp ${LIB_SOURCES})
 
@@ -55,7 +53,6 @@ ament_target_dependencies(
   sensor_msgs
   nav_msgs
   geometry_msgs
-  user_msgs
   tf2_ros
   tf2_sensor_msgs
   tf2_geometry_msgs
@@ -64,12 +61,12 @@ ament_target_dependencies(
   robot_localization
 )
 
+# Plain-signature link libraries – matches ament_target_dependencies style
 target_link_libraries(node
   Eigen3::Eigen
   ${PCL_LIBRARIES}
-  ${GEOGRAPHICLIB_LIB}
+  GeographicLib
 )
-
 
 target_compile_definitions(node PUBLIC ${PCL_DEFINITIONS})
 
