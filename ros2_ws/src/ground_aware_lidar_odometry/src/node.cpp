@@ -1,10 +1,13 @@
 #include "ground_aware_lidar_odometry/node.hpp"
 
-#include <functional>
-
-GALONode::GALONode(const GALONodeParams& node_params)
-    : Node("GALONode"),
-      node_params_(node_params),
+GALONode::GALONode()
+    : Node("galo"),
+      node_params_(LoadNodeParams(*this)),
+      deskew_prms_(LoadDeskewParams(*this)),
+      segementation_params_(LoadGroundSegmentationParams(*this)),
+      ground_patch_params_(LoadGroundPatchParams(*this)),
+      ground_registration_params_(LoadGroundRegistrationParams(*this)),
+      planar_registration_params_(LoadPlanarRegistrationParams(*this)),
       segmentation_(segementation_params_),
       ground_patches_extractor_(ground_patch_params_),
       ground_registration_(ground_registration_params_, this->get_logger(),
@@ -12,9 +15,15 @@ GALONode::GALONode(const GALONodeParams& node_params)
       planar_registration_(planar_registration_params_, this->get_logger(),
                            *this->get_clock()),
       deskew_algo_(deskew_prms_, this->get_logger(), *this->get_clock()) {
+  imu_frame = DeclareAndGet<std::string>(*this, "frames.imu_frame", imu_frame);
+  lidar_frame =
+      DeclareAndGet<std::string>(*this, "frames.lidar_frame", lidar_frame);
   imu_orientation_queue_.Resize(2000);
+
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+  RCLCPP_INFO(this->get_logger(), "Loaded GALO parameters from ROS params");
   lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
       "/Sensor/lidar_front/rslidar_points", 10,
       std::bind(&GALONode::LidarCb, this, std::placeholders::_1));
@@ -39,10 +48,10 @@ GALONode::GALONode(const GALONodeParams& node_params)
           "/GALO/ground_patch_normals", 10);
   translation_pub_ =
       this->create_publisher<geometry_msgs::msg::Point>("/GALO/translation", 1);
-  eulers_pub_ =
-      this->create_publisher<geometry_msgs::msg::Point>("/GALO/eulers", 1);
-  imu_eulers_pub_ =
-      this->create_publisher<geometry_msgs::msg::Point>("/GALO/imu_eulers", 1);
+  gt_eulers_pub_ =
+      this->create_publisher<geometry_msgs::msg::Point>("/GALO/gt_eulers", 1);
+  est_eulers_pub_ =
+      this->create_publisher<geometry_msgs::msg::Point>("/GALO/est_eulers", 1);
 
   gnss_imu_pose_pub_ =
       this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
@@ -74,6 +83,19 @@ bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
         tf_msg_map.transform.rotation.w, tf_msg_map.transform.rotation.x,
         tf_msg_map.transform.rotation.y, tf_msg_map.transform.rotation.z);
     q_i_map.normalize();
+
+    geometry_msgs::msg::TransformStamped tf_pos_lidar =
+        tf_buffer.lookupTransform(pos_antena_frame, lidar_frame,
+                                  tf2::TimePointZero);
+
+    t_pos_lidar = Eigen::Vector3d(tf_pos_lidar.transform.translation.x,
+                                  tf_pos_lidar.transform.translation.y,
+                                  tf_pos_lidar.transform.translation.z);
+
+    q_pos_lidar = Eigen::Quaterniond(
+        tf_pos_lidar.transform.rotation.w, tf_pos_lidar.transform.rotation.x,
+        tf_pos_lidar.transform.rotation.y, tf_pos_lidar.transform.rotation.z);
+    q_pos_lidar.normalize();
     has_imu_lidar_extrinsic_ = true;
     return true;
   } catch (const tf2::TransformException& ex) {
@@ -83,34 +105,130 @@ bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
   }
 }
 
+bool GALONode::TryInitializeOdomFromGnss() {
+  if (has_lidar_odom_initialized_from_gnss_) {
+    return true;
+  }
+
+  if (!GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame)) {
+    return false;
+  }
+
+  Eigen::Vector3d gnss_local;
+  Eigen::Matrix3d R_map_base = Eigen::Matrix3d::Identity();
+
+  {
+    std::lock_guard<std::mutex> lock(mut_);
+
+    if (!gnss_data_.has_gnss_position_ || !gnss_data_.has_gnss_yaw ||
+        !has_latest_R_map_base_) {
+      return false;
+    }
+
+    gnss_local = gnss_data_.gnss_local_;
+    R_map_base = latest_R_map_base_;
+  }
+
+  // Static TF:
+  //
+  //   pos_antenna <- lidar
+  Eigen::Matrix3d R_pos_lidar = q_pos_lidar.toRotationMatrix();
+
+  // Initial LiDAR pose:
+  //
+  //   map <- lidar = map <- pos_antenna * pos_antenna <- lidar
+  R_map_lidar_ = R_map_base * R_pos_lidar;
+  t_map_lidar_ = gnss_local + R_map_base * t_pos_lidar;
+
+  has_lidar_odom_initialized_from_gnss_ = true;
+
+  auto [base_roll, base_pitch, base_yaw] = EulersFromMatrixSimple(R_map_base);
+  auto [lidar_roll, lidar_pitch, lidar_yaw] =
+      EulersFromMatrixSimple(R_map_lidar_);
+
+  RCLCPP_INFO(this->get_logger(),
+              "Initialized LiDAR odometry from GNSS+IMU: "
+              "t=[%.3f %.3f %.3f], "
+              "base_rpy=[%.3f %.3f %.3f] deg, "
+              "lidar_rpy=[%.3f %.3f %.3f] deg",
+              t_map_lidar_.x(), t_map_lidar_.y(), t_map_lidar_.z(),
+              base_roll * 180.0 / M_PI, base_pitch * 180.0 / M_PI,
+              base_yaw * 180.0 / M_PI, lidar_roll * 180.0 / M_PI,
+              lidar_pitch * 180.0 / M_PI, lidar_yaw * 180.0 / M_PI);
+
+  return true;
+}
+
 void GALONode::GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg) {
-  if (msg->gps_qual < 4) return;
+  // Only use high-quality GNSS fixes.
+  // gps_qual >= 4 usually means RTK fixed / high-confidence solution.
+  if (msg->gps_qual < 4) {
+    return;
+  }
+
   double northing = 0.0;
   double easting = 0.0;
   std::string zone;
 
+  // Convert latitude/longitude to UTM.
+  //
+  // robot_localization::navsat_conversions::LLtoUTM returns:
+  //   northing: UTM northing
+  //   easting:  UTM easting
+  //
+  // We store the position as:
+  //   x = easting
+  //   y = northing
+  //   z = altitude
   robot_localization::navsat_conversions::LLtoUTM(msg->lat, msg->lon, northing,
                                                   easting, zone);
 
   Eigen::Vector3d gnss_utm(easting, northing, msg->altitude);
+
   std::lock_guard<std::mutex> lock(mut_);
 
+  // The first valid GNSS sample defines the local map origin.
+  //
+  // After this, all GNSS positions are expressed in a local ENU-like frame:
+  //
+  //   gnss_local = gnss_utm - gnss_origin
+  //
+  // This keeps numbers small and avoids large UTM coordinates in odometry.
   if (!gnss_data_.has_gnss_origin_) {
     gnss_data_.gnss_origin_ = gnss_utm;
     gnss_data_.has_gnss_origin_ = true;
   }
 
+  // Current GNSS antenna position in the local map frame.
+  //
+  // This is the position of the GNSS position antenna, not the LiDAR.
   gnss_data_.gnss_local_ = gnss_utm - gnss_data_.gnss_origin_;
   gnss_data_.has_gnss_position_ = true;
 }
+
 void GALONode::GnssYawCb(
     const qarl_msgs::msg::OrientationStamped::SharedPtr msg) {
+  // We need:
+  //
+  // 1. Static TFs:
+  //      imu <- lidar
+  //      imu <- map
+  //      pos_antenna <- lidar
+  //
+  // 2. IMU orientation history, because roll/pitch come from IMU.
+  //
+  // 3. GNSS origin, because GNSS local coordinates are only meaningful
+  //    after the first valid GNSS position has initialized the origin.
   if (!GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame) ||
       imu_orientation_queue_.Size() < 2 || !gnss_data_.has_gnss_origin_) {
     return;
   }
-  double gnss_time = rclcpp::Time(msg->header.stamp).seconds();
 
+  const double gnss_time = rclcpp::Time(msg->header.stamp).seconds();
+
+  // Find IMU orientation at the GNSS heading timestamp.
+  //
+  // This gives us roll/pitch at approximately the same time as the GNSS yaw.
   std::optional<Eigen::Quaterniond> q_closest;
   {
     std::lock_guard<std::mutex> lock(mut_);
@@ -118,59 +236,249 @@ void GALONode::GnssYawCb(
   }
 
   if (!q_closest) {
-    PrintTimeMeasurments(time_measurments);
+    // Usually this means GNSS timestamp is outside the buffered IMU range.
     return;
   }
 
   Eigen::Vector3d gnss_local;
   {
     std::lock_guard<std::mutex> lock(mut_);
+
+    if (!gnss_data_.has_gnss_position_) {
+      return;
+    }
+
+    // Position of pos_antenna in the local GNSS/map frame.
     gnss_local = gnss_data_.gnss_local_;
   }
-  auto R_map_imu_correction = q_i_map.toRotationMatrix();
-  auto R_imu_map = R_map_imu_correction * q_closest->toRotationMatrix();
-  auto [roll, pitch, yaw] = EulersFromMatrixSimple(R_imu_map);
+
+  // --------------------------------------------------------------------------
+  // 1. Convert Trimble heading to ROS ENU yaw
+  // --------------------------------------------------------------------------
+  //
+  // Trimble heading convention:
+  //   heading = clockwise from North
+  //
+  // ROS ENU yaw convention:
+  //   yaw = counter-clockwise from East
+  //
+  // Conversion:
+  //   yaw_enu = pi/2 - heading
+  const double heading_deg = msg->orientation.yaw;
+  const double heading_rad = heading_deg * M_PI / 180.0;
+
+  double yaw_enu = M_PI / 2.0 - heading_rad;
+  yaw_enu = std::atan2(std::sin(yaw_enu), std::cos(yaw_enu));
+
+  // --------------------------------------------------------------------------
+  // 2. Convert dual-antenna baseline yaw to base_link yaw
+  // --------------------------------------------------------------------------
+  //
+  // Your TFs:
+  //
+  //   pos_antenna:
+  //     translation: [3.0,  3.0, 4.2]
+  //
+  //   orientation_antenna:
+  //     translation: [3.0, -3.0, 4.2]
+  //
+  // Therefore the baseline from orientation_antenna to pos_antenna is:
+  //
+  //   [0, 6, 0] in base_link
+  //
+  // That points along +Y_base, not +X_base.
+  //
+  // If the GNSS orientation message gives the heading of that baseline,
+  // then yaw_enu is the heading of +Y_base.
+  //
+  // ROS/base yaw normally describes +X_base.
+  //
+  // Since +Y_base is +90 deg from +X_base:
+  //
+  //   yaw_base = yaw_baseline - pi/2
+  double yaw_base_enu = yaw_enu - M_PI / 2.0;
+  yaw_base_enu = std::atan2(std::sin(yaw_base_enu), std::cos(yaw_base_enu));
+
+  // --------------------------------------------------------------------------
+  // 3. Get roll/pitch from IMU
+  // --------------------------------------------------------------------------
+  //
+  // q_closest is the IMU orientation at the GNSS heading timestamp.
+  //
+  // q_i_map is your static correction from TF:
+  //
+  //   imu <- map
+  //
+  // This was already used in your earlier code to make the IMU orientation
+  // compatible with your map convention.
+  //
+  // Result:
+  //
+  //   R_map_imu_like
+  //
+  // From this, we only keep roll and pitch.
+  // GNSS yaw replaces the IMU yaw.
+
+  // debug debug debug
+  // auto [r_raw, p_raw, y_raw] =
+  //     EulersFromMatrixSimple(q_closest->toRotationMatrix());
+
+  // Eigen::Matrix3d R_map_imu_like =
+  //     q_i_map.toRotationMatrix() * q_closest->toRotationMatrix();
+
+  // auto [r_corr, p_corr, y_corr] = EulersFromMatrixSimple(R_map_imu_like);
+
+  // RCLCPP_WARN_THROTTLE(
+  //     this->get_logger(), *this->get_clock(), 1000,
+  //     "IMU rpy raw=[%.2f %.2f %.2f] corrected=[%.2f %.2f %.2f] deg",
+  //     r_raw * 180.0 / M_PI, p_raw * 180.0 / M_PI, y_raw * 180.0 / M_PI,
+  //     r_corr * 180.0 / M_PI, p_corr * 180.0 / M_PI, y_corr * 180.0 / M_PI);
+  // debug
+  Eigen::Matrix3d R_map_imu_like =
+      q_i_map.toRotationMatrix() * q_closest->toRotationMatrix();
+
+  auto [roll_imu, pitch_imu, yaw_imu_unused] =
+      EulersFromMatrixSimple(R_map_imu_like);
+
+  // auto [roll_imu, pitch_imu, yaw_imu_unused] =
+  //     EulersFromMatrixSimple(q_closest->toRotationMatrix());
+
+  (void)yaw_imu_unused;
+
+  // --------------------------------------------------------------------------
+  // 4. Build map <- base orientation
+  // --------------------------------------------------------------------------
+  //
+  // Final vehicle/base attitude:
+  //
+  //   roll  = IMU roll
+  //   pitch = IMU pitch
+  //   yaw   = GNSS dual-antenna yaw
+  //
+  // Rotation convention:
+  //
+  //   R = Rz(yaw) * Ry(pitch) * Rx(roll)
+  Eigen::AngleAxisd roll_rot(roll_imu, Eigen::Vector3d::UnitX());
+  Eigen::AngleAxisd pitch_rot(pitch_imu, Eigen::Vector3d::UnitY());
+  Eigen::AngleAxisd yaw_rot(yaw_base_enu, Eigen::Vector3d::UnitZ());
+
+  Eigen::Matrix3d R_map_base = yaw_rot.toRotationMatrix() *
+                               pitch_rot.toRotationMatrix() *
+                               roll_rot.toRotationMatrix();
+
+  // --------------------------------------------------------------------------
+  // 5. Convert GNSS antenna pose to LiDAR pose
+  // --------------------------------------------------------------------------
+  //
+  // Static TF was loaded as:
+  //
+  //   pos_antenna <- lidar
+  //
+  // Therefore:
+  //
+  //   p_pos = R_pos_lidar * p_lidar + t_pos_lidar
+  //
+  // For poses:
+  //
+  //   R_map_lidar = R_map_pos * R_pos_lidar
+  //   t_map_lidar = t_map_pos + R_map_pos * t_pos_lidar
+  //
+  // Since pos_antenna has identity rotation relative to base_link in your TF,
+  // we can use:
+  //
+  //   R_map_pos = R_map_base
+  //
+  // and:
+  //
+  //   t_map_pos = gnss_local
+  Eigen::Matrix3d R_pos_lidar = q_pos_lidar.toRotationMatrix();
+  Eigen::Vector3d t_pos_lidar_local = t_pos_lidar;
+
+  Eigen::Matrix3d R_map_lidar_gt = R_map_base * R_pos_lidar;
+  Eigen::Vector3d t_map_lidar_gt = gnss_local + R_map_base * t_pos_lidar_local;
+
+  // --------------------------------------------------------------------------
+  // 6. Publish LiDAR GT pose
+  // --------------------------------------------------------------------------
   geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
   pose_msg.header.stamp = msg->header.stamp;
   pose_msg.header.frame_id = "gnss_map";
-  pose_msg.pose.pose.position.x = gnss_local.x();
-  pose_msg.pose.pose.position.y = gnss_local.y();
-  pose_msg.pose.pose.position.z = gnss_local.z();
 
-  double heading_deg = msg->orientation.yaw;
-  double heading_rad = heading_deg * M_PI / 180.0;
+  pose_msg.pose.pose.position.x = t_map_lidar_gt.x();
+  pose_msg.pose.pose.position.y = t_map_lidar_gt.y();
+  pose_msg.pose.pose.position.z = t_map_lidar_gt.z();
 
-  // Trimble: clockwise from North
-  // ROS ENU: counter-clockwise from East
-  double yaw_enu = M_PI / 2.0 - heading_rad;
-
-  // normalize to [-pi, pi]
-  yaw_enu = std::atan2(std::sin(yaw_enu), std::cos(yaw_enu));
+  auto [roll_gt, pitch_gt, yaw_gt] = EulersFromMatrixSimple(R_map_lidar_gt);
 
   tf2::Quaternion q;
-  q.setRPY(roll, pitch, yaw_enu);
+  q.setRPY(roll_gt, pitch_gt, yaw_gt);
   q.normalize();
+
   pose_msg.pose.pose.orientation = tf2::toMsg(q);
+
   auto& cov = pose_msg.pose.covariance;
   std::fill(cov.begin(), cov.end(), 0.0);
 
   cov[0] = node_params_.gt_cov_.x_precision * node_params_.gt_cov_.x_precision;
+
   cov[7] = node_params_.gt_cov_.y_precision * node_params_.gt_cov_.y_precision;
+
   cov[14] = node_params_.gt_cov_.z_precision * node_params_.gt_cov_.z_precision;
 
-  cov[21] = (node_params_.gt_cov_.roll_precision * M_PI / 180.0) *
-            (node_params_.gt_cov_.roll_precision * M_PI / 180.0);
-  cov[28] = (node_params_.gt_cov_.pitch_precision * M_PI / 180.0) *
-            (node_params_.gt_cov_.pitch_precision * M_PI / 180.0);
-  cov[35] = (node_params_.gt_cov_.yaw_precision * M_PI / 180.0) *
-            (node_params_.gt_cov_.yaw_precision * M_PI / 180.0);
+  cov[21] = std::pow(node_params_.gt_cov_.roll_precision * M_PI / 180.0, 2.0);
+  cov[28] = std::pow(node_params_.gt_cov_.pitch_precision * M_PI / 180.0, 2.0);
+  cov[35] = std::pow(node_params_.gt_cov_.yaw_precision * M_PI / 180.0, 2.0);
+
   gnss_imu_pose_pub_->publish(pose_msg);
-  std::lock_guard<std::mutex> lock(mut_);
-  gnss_data_.yaw = yaw_enu;
-  gnss_data_.has_gnss_yaw = true;
+
+  geometry_msgs::msg::Point eulers_msg;
+  eulers_msg.x = roll_gt;
+  eulers_msg.y = pitch_gt;
+  eulers_msg.z = yaw_gt;
+  gt_eulers_pub_->publish(eulers_msg);
+
+  // --------------------------------------------------------------------------
+  // 7. Store GNSS yaw for odometry initialization
+  // --------------------------------------------------------------------------
+  //
+  // Important:
+  //
+  // Store base yaw, not LiDAR yaw.
+  //
+  // TryInitializeOdomFromGnss() should use this yaw as map <- base/pos_antenna,
+  // and then compose with pos_antenna <- lidar.
+  {
+    std::lock_guard<std::mutex> lock(mut_);
+
+    gnss_data_.yaw = yaw_base_enu;
+    gnss_data_.has_gnss_yaw = true;
+
+    latest_R_map_base_ = R_map_base;
+    has_latest_R_map_base_ = true;
+  }
 }
 
 void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+  // Main LiDAR pipeline:
+  //
+  //   1. Deskew cloud
+  //   2. Segment ground/non-ground
+  //   3. Extract planar/non-ground points
+  //   4. Extract ground patches
+  //   5. Initialize from GNSS if needed
+  //   6. Run planar ICP for x/y/yaw
+  //   7. Run ground registration for z/roll/pitch
+  //   8. Merge results
+  //   9. Publish odometry pose
+  //   10. Add current frame into local map
+  ProcessCloud(msg);
+
+  // Print throttled timing summary.
+  PrintTimeMeasurments(time_measurments);
+}
+
+void GALONode::ProcessCloud(
+    const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   time_measurments.clear();
 
   std::optional<sensor_msgs::msg::PointCloud2> deskewed;
@@ -187,57 +495,72 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   }
 
   if (!deskewed) return;
-
+  SegmentationResult segmentation_result;
   deskew_cld_pub_->publish(*deskewed);
-
-  TimeMeasurments_t seg_meas("segmentaion");
-  auto segmentation_result = segmentation_.Classify(*deskewed);
-  seg_meas.SetEnd();
-  time_measurments.push_back(seg_meas);
-
-  if (node_params_.debug) {
-    auto colored_cld = segmentation_.MakeColoredCloud(segmentation_result);
-    colored_pub_->publish(colored_cld);
+  {
+    TimeMeasurments_t meas("segmentaion");
+    segmentation_result = segmentation_.Classify(*deskewed);
+    meas.SetEnd();
+    time_measurments.push_back(meas);
+    if (node_params_.debug) {
+      auto colored_cld = segmentation_.MakeColoredCloud(segmentation_result);
+      colored_pub_->publish(colored_cld);
+    }
   }
-  TimeMeasurments_t objects_extraction_meas("objects_extration");
-  auto cur_planar_points =
-      planar_registration_.ExtractPoints(*deskewed, segmentation_result.labels);
-  if (cur_planar_points.size()) {
-    cur_planar_points = planar_registration_.Filter(cur_planar_points);
+  std::vector<Eigen::Vector2d> cur_planar_points;
+  {
+    TimeMeasurments_t meas("objects_extration");
+    cur_planar_points = planar_registration_.ExtractPoints(
+        *deskewed, segmentation_result.labels);
+    if (cur_planar_points.size()) {
+      cur_planar_points = planar_registration_.Filter(cur_planar_points);
+    }
+    meas.SetEnd();
+    time_measurments.push_back(meas);
   }
-  objects_extraction_meas.SetEnd();
-  time_measurments.push_back(objects_extraction_meas);
-  TimeMeasurments_t extraction_meas("ground_extration");
-  std::vector<GroundPatch> cur_patches =
-      ground_patches_extractor_.Extract(*deskewed, segmentation_result.labels);
-  extraction_meas.SetEnd();
-  time_measurments.push_back(extraction_meas);
+  std::vector<GroundPatch> cur_patches;
+  {
+    TimeMeasurments_t meas("ground_extration");
+    cur_patches = ground_patches_extractor_.Extract(*deskewed,
+                                                    segmentation_result.labels);
+    meas.SetEnd();
+    time_measurments.push_back(meas);
+  }
 
   if (node_params_.debug) {
     auto patches_marker =
         ground_patches_extractor_.MakeGroundPatchMarkers(deskewed->header);
     ground_patches_pub_->publish(patches_marker);
   }
+  if (!TryInitializeOdomFromGnss()) {
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 1000,
+        "Waiting for GNSS position/yaw to initialize LiDAR odometry");
+    return;
+  }
   if (ground_map_.empty() || objects_map_.empty()) {
     RCLCPP_WARN(this->get_logger(),
                 "Either objects or ground map is empty %zu %zu",
                 ground_map_.size(), objects_map_.size());
-    auto patches_in_map = TransformPatchesToMap(
-        cur_patches, Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
+
+    auto patches_in_map =
+        TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar_);
     ground_map_frames_.push_back(patches_in_map);
     RebuildGroundMap();
 
     auto planar_points_in_map =
-        TransformPointsToMap(cur_planar_points, Eigen::Matrix3d::Identity(),
-                             Eigen::Vector3d::Zero());
+        TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar_);
     objects_map_frames_.push_back(planar_points_in_map);
     RebuildObjectsMap();
-    PrintTimeMeasurments(time_measurments);
+    RCLCPP_WARN(
+        this->get_logger(),
+        "Initialized first map frame at pose t=[%.3f %.3f %.3f], yaw=%.3f",
+        t_map_lidar_.x(), t_map_lidar_.y(), t_map_lidar_.z(),
+        std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0)));
     return;
   }
   if (!GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame) ||
-      imu_orientation_queue_.Size() >= 2) {
-    PrintTimeMeasurments(time_measurments);
+      imu_orientation_queue_.Size() < 2) {
     return;
   }
   GnssData gnss_data_local;
@@ -246,10 +569,6 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     gnss_data_local = gnss_data_;
   }
 
-  if (!gnss_data_local.has_gnss_position_ || !gnss_data_local.has_gnss_yaw) {
-    PrintTimeMeasurments(time_measurments);
-    return;
-  }
   double lidar_time = rclcpp::Time(deskewed->header.stamp).seconds();
   std::optional<Eigen::Quaterniond> q_lidar;
   {
@@ -258,14 +577,12 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   }
 
   if (!q_lidar) {
-    PrintTimeMeasurments(time_measurments);
     return;
   }
 
   if (!has_lidar_imu_prev_) {
     imu_q_lidar_prev_ = *q_lidar;
     has_lidar_imu_prev_ = true;
-    PrintTimeMeasurments(time_measurments);
     return;
   }
   // IMU relative rotation between previous and current LiDAR scan timestamps.
@@ -313,126 +630,127 @@ void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
+  // if (node_params_.debug) {
+  //   RCLCPP_WARN_THROTTLE(
+  //       this->get_logger(), *this->get_clock(), 2000,
+  //       "Planar valid=%d matches=%d residual=%.3f t=[%.3f %.3f] yaw=%.3f",
+  //       planar_reg_res.valid, planar_reg_res.matches,
+  //       planar_reg_res.mean_residual, planar_reg_res.t.x(),
+  //       planar_reg_res.t.y(),
+  //       std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0)));
+  // }
+  if (!planar_reg_res.valid) {
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 1000,
+        "Planar registration invalid, skipping odometry update");
+    return;
+  }
+  bool is_ground_ok = CheckGroundRegistration(ground_reg_result);
 
-  if (ground_reg_result.valid && planar_reg_res.valid) {
-    Eigen::Matrix3d R_map_lidar_prev = R_map_lidar_;
-    Eigen::Vector3d t_map_lidar_prev = t_map_lidar_;
+  Eigen::Matrix3d R_abs;
+  Eigen::Vector3d t_abs;
+  if (is_ground_ok) {
+    R_abs = MergeGroundAndPlanarRotation(ground_reg_result.R, R_map_lidar_,
+                                         planar_reg_res.R);
+    t_abs = MergeGroundAndPlanarTranslation(ground_reg_result.t, t_map_lidar_,
+                                            planar_reg_res.t);
+  } else {
+    // Ground failed: trust planar x/y/yaw, keep previous z, take roll/pitch
+    // from IMU prior.
+    double yaw = std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
 
-    Eigen::Matrix3d R_abs =
-        MergeGroundAndPlanarRotation(ground_reg_result.R, planar_reg_res.R);
+    // auto [roll_prior, pitch_prior, yaw_prior_unused] =
+    //     EulersFromMatrixSimple(R_imu_prior_map);
+    // (void)yaw_prior_unused;
+    auto [roll_prior, pitch_prior, yaw_prior_unused] =
+        EulersFromMatrixSimple(R_map_lidar_);
+    (void)yaw_prior_unused;
 
-    Eigen::Vector3d t_abs =
-        MergeGroundAndPlanarTranslation(ground_reg_result.t, planar_reg_res.t);
+    R_abs =
+        Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix() *
+        Eigen::AngleAxisd(pitch_prior, Eigen::Vector3d::UnitY())
+            .toRotationMatrix() *
+        Eigen::AngleAxisd(roll_prior, Eigen::Vector3d::UnitX())
+            .toRotationMatrix();
 
-    geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
-    pose_msg.header.frame_id = "lidar_odometry";
-    pose_msg.header.stamp = msg->header.stamp;
+    t_abs.x() = planar_reg_res.t.x();
+    t_abs.y() = planar_reg_res.t.y();
+    t_abs.z() = t_map_lidar_.z();
+  }
+  R_map_lidar_ = R_abs;
+  t_map_lidar_ = t_abs;
+  auto planar_points_in_map =
+      TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar_);
 
-    pose_msg.pose.pose.position.x = t_abs.x();
-    pose_msg.pose.pose.position.y = t_abs.y();
-    pose_msg.pose.pose.position.z = t_abs.z();
-    auto [roll_abs, pitch_abs, yaw_abs] = EulersFromMatrixSimple(R_abs);
-    tf2::Quaternion q;
-    q.setRPY(roll_abs, pitch_abs, yaw_abs);
-    q.normalize();
-    pose_msg.pose.pose.orientation = tf2::toMsg(q);
+  objects_map_frames_.push_back(planar_points_in_map);
 
-    auto scale = 1;
-    // worse if residual high
-    scale *= std::clamp(planar_reg_res.mean_residual / 0.1, 1.0, 5.0);
-    // worse if few matches
-    scale *= std::clamp(100.0 / std::max(planar_reg_res.matches, 1), 1.0, 3.0);
+  while (objects_map_frames_.size() > node_params_.max_planar_map_frames) {
+    objects_map_frames_.pop_front();
+  }
+  RebuildObjectsMap();
+  // RCLCPP_WARN_THROTTLE(
+  //     this->get_logger(), *this->get_clock(), 1000,
+  //     "patches current=%zu, ground_map=%zu, ground_map_frames=%zu, objects "
+  //     "current=%zu, objects_map=%zu, objects_map_frames=%zu",
+  //     cur_patches.size(), ground_map_.size(), ground_map_frames_.size(),
+  //     cur_planar_points.size(), objects_map_.size(),
+  //     objects_map_frames_.size());
 
-    double sigma_xy = node_params_.est_cov_.base_xy * scale;
-    double sigma_yaw = 2.0 * M_PI / 180.0 * scale;  // 2 deg base
-    auto& cov = pose_msg.pose.covariance;
-    cov[0] = sigma_xy * sigma_xy;
-    cov[7] = sigma_xy * sigma_xy;
-    cov[14] = node_params_.est_cov_.z *
-              node_params_.est_cov_.z;  // z less reliable in LiDAR planar
-
-    cov[21] = node_params_.est_cov_.roll;   // roll (weak)
-    cov[28] = node_params_.est_cov_.pitch;  // pitch
-    cov[35] = sigma_yaw * sigma_yaw;
-    lidar_pose_pub_->publish(pose_msg);
-
-    // if (node_params_.debug) {
-    //
-    //   auto [roll_ground, pitch_ground, yaw_ground] =
-    //       EulersFromMatrixSimple(ground_reg_result.R);
-
-    //   double planar_yaw =
-    //       std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
-
-    //   Eigen::Matrix3d R_debug_delta = R_abs *
-    //   R_map_lidar_prev.transpose(); Eigen::Vector3d t_debug_delta =
-    //       t_abs - R_debug_delta * t_map_lidar_prev;
-    //   RCLCPP_INFO_THROTTLE(
-    //       this->get_logger(), *this->get_clock(), 500,
-    //       "GALO pose | t=[%.3f %.3f %.3f] | delta=[%.3f %.3f %.3f] | "
-    //       "dist_xy=%.3f dz=%.3f",
-    //       t_map_lidar_.x(), t_map_lidar_.y(), t_map_lidar_.z(),
-    //       t_debug_delta.x(), t_debug_delta.y(), t_debug_delta.z(),
-    //       std::hypot(t_map_lidar_.x(), t_map_lidar_.y()),
-    //       t_map_lidar_.z());
-    //   RCLCPP_INFO_THROTTLE(
-    //       this->get_logger(), *this->get_clock(), 500,
-    //       "Ground result | valid=%d matches=%d mean_abs_res=%.4f "
-    //       "t_ground=[%.3f %.3f %.3f] rpy_ground=[%.5f %.5f %.5f]",
-    //       ground_reg_result.valid, ground_reg_result.num_matches,
-    //       ground_reg_result.mean_abs_residual, ground_reg_result.t.x(),
-    //       ground_reg_result.t.y(), ground_reg_result.t.z(),
-    //       roll_ground, pitch_ground, yaw_ground);
-    //   geometry_msgs::msg::Point translation_msg;
-    //   translation_msg.x = t_debug_delta.x();
-    //   translation_msg.y = t_debug_delta.y();
-    //   translation_msg.z = t_debug_delta.z();
-    //   translation_pub_->publish(translation_msg);
-
-    //   geometry_msgs::msg::Point eulers_msg;
-    //   auto [roll, pitch, yaw] =
-    //   EulersFromMatrixSimple(R_debug_delta); eulers_msg.x = roll;
-    //   eulers_msg.y = pitch;
-    //   eulers_msg.z = yaw;
-    //   eulers_pub_->publish(eulers_msg);
-
-    //   geometry_msgs::msg::Point eulers_imu_msg;
-    //   auto [imu_r, imu_p, imu_y] =
-    //   EulersFromMatrixSimple(R_lidar_delta);
-    //   RCLCPP_INFO_THROTTLE(this->get_logger(),
-    //   *this->get_clock(), 500,
-    //                        "IMU delta | rpy=[%.5f %.5f %.5f]",
-    //                        imu_r, imu_p, imu_y);
-    //   eulers_imu_msg.x = imu_r;
-    //   eulers_imu_msg.y = imu_p;
-    //   eulers_imu_msg.z = imu_y;
-    //   imu_eulers_pub_->publish(eulers_imu_msg);
-    // }
-    R_map_lidar_ = R_abs;
-    t_map_lidar_ = t_abs;
-
+  if (cur_patches.size() >= 30 && planar_reg_res.valid) {
     auto patches_in_map =
         TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar_);
 
     ground_map_frames_.push_back(patches_in_map);
 
-    while (ground_map_frames_.size() > node_params_.max_ground_map_frames_) {
+    while (ground_map_frames_.size() > node_params_.max_ground_map_frames) {
       ground_map_frames_.pop_front();
     }
-
-    auto planar_points_in_map =
-        TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar_);
-
-    objects_map_frames_.push_back(planar_points_in_map);
-
-    while (objects_map_frames_.size() > node_params_.max_planar_map_frames_) {
-      objects_map_frames_.pop_front();
-    }
-
     RebuildGroundMap();
-    RebuildObjectsMap();
   }
-  PrintTimeMeasurments(time_measurments);
+
+  // RCLCPP_WARN_THROTTLE(
+  //   this->get_logger(), *this->get_clock(), 1000,
+  //   "after map update: ground_map=%zu, ground_map_frames=%zu, "
+  //   "objects_map=%zu, objects_map_frames=%zu",
+  //   ground_map_.size(), ground_map_frames_.size(), objects_map_.size(),
+  //   objects_map_frames_.size());
+  geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
+  pose_msg.header.frame_id = "gnss_map";
+  pose_msg.header.stamp = msg->header.stamp;
+
+  pose_msg.pose.pose.position.x = t_abs.x();
+  pose_msg.pose.pose.position.y = t_abs.y();
+  pose_msg.pose.pose.position.z = t_abs.z();
+  auto [roll_abs, pitch_abs, yaw_abs] = EulersFromMatrixSimple(R_abs);
+  tf2::Quaternion q;
+  q.setRPY(roll_abs, pitch_abs, yaw_abs);
+  q.normalize();
+  pose_msg.pose.pose.orientation = tf2::toMsg(q);
+
+  auto scale = 1;
+  // worse if residual high
+  scale *= std::clamp(planar_reg_res.mean_residual / 0.1, 1.0, 5.0);
+  // worse if few matches
+  scale *= std::clamp(100.0 / std::max(planar_reg_res.matches, 1), 1.0, 3.0);
+
+  double sigma_xy = node_params_.est_cov_.base_xy * scale;
+  double sigma_yaw = 2.0 * M_PI / 180.0 * scale;  // 2 deg base
+  auto& cov = pose_msg.pose.covariance;
+  cov[0] = sigma_xy * sigma_xy;
+  cov[7] = sigma_xy * sigma_xy;
+  cov[14] = node_params_.est_cov_.z *
+            node_params_.est_cov_.z;  // z less reliable in LiDAR planar
+
+  cov[21] = node_params_.est_cov_.roll;   // roll (weak)
+  cov[28] = node_params_.est_cov_.pitch;  // pitch
+  cov[35] = sigma_yaw * sigma_yaw;
+  lidar_pose_pub_->publish(pose_msg);
+
+  geometry_msgs::msg::Point eulers_msg;
+  eulers_msg.x = roll_abs;
+  eulers_msg.y = pitch_abs;
+  eulers_msg.z = yaw_abs;
+  est_eulers_pub_->publish(eulers_msg);
 }
 
 void GALONode::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -569,14 +887,19 @@ void GALONode::RebuildObjectsMap() {
 }
 
 Eigen::Matrix3d GALONode::MergeGroundAndPlanarRotation(
-    const Eigen::Matrix3d& R_ground, const Eigen::Matrix2d& R_planar) {
+    const Eigen::Matrix3d& R_ground, const Eigen::Matrix3d& R_prior,
+    const Eigen::Matrix2d& R_planar, double alpha_rp) {
   double roll, pitch, dummy_yaw;
-  std::tie(roll, pitch, dummy_yaw) = EulersFromMatrixSimple(R_ground);
+  auto [r_prior, p_prior, y_prior] = EulersFromMatrixSimple(R_prior);
+  auto [r_ground, p_ground, y_ground] = EulersFromMatrixSimple(R_ground);
+
+  double r_final = r_prior + alpha_rp * NormalizeAngle(r_ground - r_prior);
+  double p_final = p_prior + alpha_rp * NormalizeAngle(p_ground - p_prior);
 
   double yaw = std::atan2(R_planar(1, 0), R_planar(0, 0));
 
-  Eigen::AngleAxisd roll_rot(roll, Eigen::Vector3d::UnitX());
-  Eigen::AngleAxisd pitch_rot(pitch, Eigen::Vector3d::UnitY());
+  Eigen::AngleAxisd roll_rot(r_final, Eigen::Vector3d::UnitX());
+  Eigen::AngleAxisd pitch_rot(p_final, Eigen::Vector3d::UnitY());
   Eigen::AngleAxisd yaw_rot(yaw, Eigen::Vector3d::UnitZ());
 
   return yaw_rot.toRotationMatrix() * pitch_rot.toRotationMatrix() *
@@ -584,18 +907,43 @@ Eigen::Matrix3d GALONode::MergeGroundAndPlanarRotation(
 }
 
 Eigen::Vector3d GALONode::MergeGroundAndPlanarTranslation(
-    const Eigen::Vector3d& t_ground, const Eigen::Vector2d& t_planar) {
+    const Eigen::Vector3d& t_ground, const Eigen::Vector3d& t_prior,
+    const Eigen::Vector2d& t_planar, double alpha_z) {
   Eigen::Vector3d t;
   t.x() = t_planar.x();
   t.y() = t_planar.y();
-  t.z() = t_ground.z();
+
+  double z_final = t_prior.z() + alpha_z * (t_ground.z() - t_prior.z());
+  t.z() = z_final;
   return t;
+}
+
+double GALONode::NormalizeAngle(double a) {
+  return std::atan2(std::sin(a), std::cos(a));
+}
+
+bool GALONode::CheckGroundRegistration(const GroundRegistrationResult& res) {
+  if (!res.valid || res.num_matches < ground_reg_gate_params_.min_matches ||
+      res.mean_abs_residual > ground_reg_gate_params_.max_residual) {
+    return false;
+  }
+  auto [roll_prev, pitch_prev, yaw_prev] = EulersFromMatrixSimple(R_map_lidar_);
+  auto [roll_g, pitch_g, yaw_g] = EulersFromMatrixSimple(res.R);
+
+  double droll = std::abs(
+      std::atan2(std::sin(roll_g - roll_prev), std::cos(roll_g - roll_prev)));
+  double dpitch = std::abs(std::atan2(std::sin(pitch_g - pitch_prev),
+                                      std::cos(pitch_g - pitch_prev)));
+  double dz = std::abs(res.t.z() - t_map_lidar_.z());
+
+  return droll < DEG2RAD(ground_reg_gate_params_.max_droll) &&
+         dpitch < DEG2RAD(ground_reg_gate_params_.max_dpitch) &&
+         dz < ground_reg_gate_params_.max_dz;
 }
 
 int main(int argc, char* argv[]) {
   rclcpp::init(argc, argv);
-  GALONodeParams prms;
-  auto node = std::make_shared<GALONode>(prms);
+  auto node = std::make_shared<GALONode>();
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

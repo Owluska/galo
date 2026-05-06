@@ -28,7 +28,10 @@ void Segmentation::FillGrid(const CloudMsg& msg) {
 
     auto& cell = grid_[key];
     cell.count++;
-    cell.min_z = std::min(cell.min_z, z);
+    cell.zs.push_back(z);
+  }
+  for (auto& [key, cell] : grid_) {
+    cell.CellGroundZ();
   }
 }
 
@@ -94,9 +97,14 @@ SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
       continue;
     }
     double ground_z = gz_it->second;
-    res.labels[idx] = (z - ground_z) < params_.ground_height_threshold
-                          ? PointLabels::GROUND
-                          : PointLabels::NON_GROUND;
+    double dz = z - ground_z;
+
+    if (dz > params_.ground_min_height &&
+        dz < params_.ground_height_threshold) {
+      res.labels[idx] = PointLabels::GROUND;
+    } else {
+      res.labels[idx] = PointLabels::NON_GROUND;
+    }
   }
   return res;
 }
@@ -180,11 +188,12 @@ std::pair<int, int> GroundPatchExtractor::GetIndexes(float x, float y) const {
 
 std::vector<GroundPatch> GroundPatchExtractor::Extract(
     const CloudMsg& cloud, const std::vector<PointLabels>& labels) {
+  patches_.clear();
+  valid_patches_.clear();
   size_t n = static_cast<size_t>(cloud.width);
   n *= static_cast<size_t>(cloud.height);
   if (n == 0 || labels.size() != n) return valid_patches_;
-  patches_.clear();
-  valid_patches_.clear();
+
   sensor_msgs::PointCloud2ConstIterator<float> x_it(cloud, "x");
   sensor_msgs::PointCloud2ConstIterator<float> y_it(cloud, "y");
   sensor_msgs::PointCloud2ConstIterator<float> z_it(cloud, "z");
@@ -193,6 +202,7 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     double x = static_cast<double>(*x_it);
     double y = static_cast<double>(*y_it);
     double z = static_cast<double>(*z_it);
+    if (!IsFinitePoint(x, y, z)) continue;
     auto label = labels[idx];
     if (label != PointLabels::GROUND) continue;
 
@@ -232,8 +242,10 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     if (thickness > params_.max_thickness) continue;
     if (normal.z() < params_.min_normal_z) continue;
 
-    double planarity = (lambda1 - lambda0) / lambda2;
-    if (planarity < params_.min_planarity && lambda2 > 1e-4) continue;
+    double sum_lambda = lambda0 + lambda1 + lambda2 + 1e-12;
+    double surface_variation = lambda0 / sum_lambda;
+
+    if (surface_variation > params_.max_surface_variation) continue;
 
     GroundPatch patch;
     patch.centroid = centroid;
@@ -241,7 +253,7 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     patch.covariance = cov;
     patch.support = N;
     patch.weight = static_cast<double>(N);
-    patch.planarity = planarity;
+    patch.surface_variation = surface_variation;
     patch.key = key;
 
     valid_patches_.push_back(patch);
@@ -264,6 +276,7 @@ GroundPatchExtractor::MakeGroundPatchMarkers(
   visualization_msgs::msg::Marker clear_cells;
   clear_cells.header = header;
   clear_cells.ns = "ground_patch_cells";
+  clear_cells.id = 0;
   clear_cells.action = visualization_msgs::msg::Marker::DELETEALL;
   markers.markers.push_back(clear_cells);
   int id = 1;
@@ -566,6 +579,11 @@ GroundRegistrationResult GroundRegistration::Align(
       max_y = std::max(max_y, p.y());
 
       const auto& mp = map[match_idx];
+
+      double vertical_error = std::abs(p.z() - mp.centroid.z());
+      if (vertical_error > params_.max_match_z_difference) {
+        continue;
+      }
       const Eigen::Vector3d& q = mp.centroid;
       const Eigen::Vector3d& n = mp.normal;
 
@@ -661,6 +679,53 @@ GroundRegistrationResult GroundRegistration::Align(
       H += weight * J * J.transpose();
       b += weight * J * r;
 
+      // debug
+      // Expected result: analytic and numeric should have the same sign and
+      // close magnitude. If roll/pitch are opposite sign, then this line is
+      // wrong:
+      // if (iter < 5) {
+      //   const double eps = 1e-4;
+
+      //   Eigen::Vector3d dtheta_roll(eps, 0.0, 0.0);
+      //   Eigen::Matrix3d R_eps = R * ExpSO3(dtheta_roll);
+
+      //   Eigen::Vector3d p_eps = R_eps * cur.centroid + t;
+      //   double r_eps = n.dot(p_eps - q);
+
+      //   double numeric = (r_eps - r) / eps;
+
+      //   RCLCPP_WARN(
+      //       logger_,
+      //       "ground J roll analytic %.9f numeric %.9f r %.9f r_eps %.9f",
+      //       J_roll, numeric, r, r_eps);
+
+      //   Eigen::Vector3d dtheta_pitch(0.0, eps, 0.0);
+      //   R_eps = R * ExpSO3(dtheta_pitch);
+
+      //   p_eps = R_eps * cur.centroid + t;
+      //   r_eps = n.dot(p_eps - q);
+
+      //   numeric = (r_eps - r) / eps;
+
+      //   RCLCPP_WARN(
+      //       logger_,
+      //       "ground J pitch analytic %.9f numeric %.9f r %.9f r_eps %.9f",
+      //       J_pitch, numeric, r, r_eps);
+
+      //   Eigen::Vector3d t_eps = t;
+      //   t_eps.z() += eps;
+
+      //   p_eps = R * cur.centroid + t_eps;
+      //   r_eps = n.dot(p_eps - q);
+
+      //   numeric = (r_eps - r) / eps;
+
+      //   RCLCPP_WARN(logger_,
+      //               "ground J dz analytic %.9f numeric %.9f r %.9f r_eps
+      //               %.9f", J_dz, numeric, r, r_eps);
+      // }
+      // debug
+
       ++num_matches;
       abs_residual_sum += std::abs(r);
     }
@@ -698,6 +763,7 @@ GroundRegistrationResult GroundRegistration::Align(
     // We constrain roll and pitch only. Yaw is ignored here because yaw is
     // estimated by planar registration.
     // ------------------------------------------------------------
+
     if (params_.use_imu_prior) {
       Eigen::Matrix3d R_err = R_imu_prior.transpose() * R;
       Eigen::Vector3d rot_err = LogSO3(R_err);

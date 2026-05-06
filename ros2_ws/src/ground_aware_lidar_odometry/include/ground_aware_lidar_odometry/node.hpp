@@ -5,6 +5,7 @@
 #include <tf2_sensor_msgs/tf2_sensor_msgs.h>
 
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <robot_localization/navsat_conversions.hpp>
@@ -22,6 +23,16 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+
+namespace {
+
+template <typename T>
+T DeclareAndGet(rclcpp::Node& node, const std::string& name,
+                const T& default_value) {
+  return node.declare_parameter<T>(name, default_value);
+}
+
+}  // namespace
 
 struct GnssCovariance {
   double x_precision = 0.03;
@@ -42,8 +53,8 @@ struct LidarCovariance {
 
 struct GALONodeParams {
   int debug = 1;
-  int max_ground_map_frames_ = 10;
-  int max_planar_map_frames_ = 10;
+  int max_ground_map_frames = 10;
+  int max_planar_map_frames = 10;
   GnssCovariance gt_cov_;
   LidarCovariance est_cov_;
 };
@@ -67,24 +78,37 @@ struct GnssData {
   bool has_gnss_yaw = false;
 };
 
+struct GroundRegistrationGatePrms {
+  int min_matches = 35;
+  double max_residual = 0.35;
+  double max_droll = 5.0;   // deg
+  double max_dpitch = 5.0;  // deg
+  double max_dz = 1.0;      // m
+};
+
 class GALONode : public rclcpp::Node {
  public:
-  GALONode(const GALONodeParams& node_params);
+  GALONode();
 
  private:
   std::string imu_frame = "imu";
   std::string lidar_frame = "rslidar";
-  FiniteDeque<ImuOrientationStamped> imu_orientation_queue_;
+  std::string pos_antena_frame = "pos_antenna";
   bool has_imu_lidar_extrinsic_ = false;
   bool has_imu_prev_ = false;
   bool has_lidar_imu_prev_ = false;
+  bool has_lidar_odom_initialized_from_gnss_ = false;
+  bool has_latest_R_map_base_ = false;
+
+  std::mutex mut_;
+
   GALONodeParams node_params_;
   DeskewParams deskew_prms_;
   GroundSegmentationParams segementation_params_;
   GroundPatchParams ground_patch_params_;
   GroundRegistrationParams ground_registration_params_;
   PlanarRegistrationParams planar_registration_params_;
-  std::mutex mut_;
+  GroundRegistrationGatePrms ground_reg_gate_params_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<qarl_msgs::msg::NmeaGGA>::SharedPtr gnss_sub_;
@@ -96,18 +120,31 @@ class GALONode : public rclcpp::Node {
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       ground_patches_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr translation_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr eulers_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr imu_eulers_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr gt_eulers_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr est_eulers_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       gnss_imu_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       lidar_pose_pub_;
 
-  Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
   Eigen::Vector3d t_map_lidar_ = Eigen::Vector3d::Zero();
-  Eigen::Quaterniond imu_q_prev_, q_il, q_i_map, imu_q_lidar_prev_;
+  Eigen::Vector3d t_il, t_pos_lidar;
+
+  Eigen::Quaterniond imu_q_prev_, q_il, q_i_map, imu_q_lidar_prev_, q_pos_lidar;
   Eigen::Matrix3d R_imu_delta;
-  Eigen::Vector3d t_il;
+  Eigen::Matrix3d latest_R_map_base_ = Eigen::Matrix3d::Identity();
+  Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
+
+  FiniteDeque<ImuOrientationStamped> imu_orientation_queue_;
+  std::vector<TimeMeasurments_t> time_measurments;
+  std::vector<GroundPatch> ground_map_;
+  std::vector<Eigen::Vector2d> objects_map_;
+  std::deque<std::vector<GroundPatch>> ground_map_frames_;
+  std::deque<std::vector<Eigen::Vector2d>> objects_map_frames_;
+
   GnssData gnss_data_;
   DeskewAlgorithm deskew_algo_;
   Segmentation segmentation_;
@@ -115,19 +152,15 @@ class GALONode : public rclcpp::Node {
   GroundPatchExtractor ground_patches_extractor_;
   GroundRegistration ground_registration_;
   PlanarRegistration planar_registration_;
-  std::vector<TimeMeasurments_t> time_measurments;
-  std::deque<std::vector<GroundPatch>> ground_map_frames_;
-  std::vector<GroundPatch> ground_map_;
-  std::deque<std::vector<Eigen::Vector2d>> objects_map_frames_;
-  std::vector<Eigen::Vector2d> objects_map_;
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
   void LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg);
   void GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg);
   void GnssYawCb(const qarl_msgs::msg::OrientationStamped::SharedPtr msg);
 
   void PrintTimeMeasurments(const std::vector<TimeMeasurments_t>& measurments);
+
+  void ProcessCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   std::tuple<double, double, double> EulersFromMatrixSimple(
       const Eigen::Matrix3d& R);
   bool GetExtrinsicTf(tf2_ros::Buffer& tf_buffer, const std::string& imu_frame,
@@ -143,8 +176,26 @@ class GALONode : public rclcpp::Node {
   void RebuildGroundMap();
   void RebuildObjectsMap();
   Eigen::Vector3d MergeGroundAndPlanarTranslation(
-      const Eigen::Vector3d& t_ground, const Eigen::Vector2d& t_planar);
+      const Eigen::Vector3d& t_ground, const Eigen::Vector3d& t_prior,
+      const Eigen::Vector2d& t_planar, double alpha_z = 0.3);
 
   Eigen::Matrix3d MergeGroundAndPlanarRotation(const Eigen::Matrix3d& R_ground,
-                                               const Eigen::Matrix2d& R_planar);
+                                               const Eigen::Matrix3d& R_prior,
+                                               const Eigen::Matrix2d& R_planar,
+                                               double alpha_rp = 0.2);
+  bool TryInitializeOdomFromGnss();
+
+  static GALONodeParams LoadNodeParams(rclcpp::Node& node);
+  static DeskewParams LoadDeskewParams(rclcpp::Node& node);
+  static GroundSegmentationParams LoadGroundSegmentationParams(
+      rclcpp::Node& node);
+  static GroundPatchParams LoadGroundPatchParams(rclcpp::Node& node);
+  static GroundRegistrationParams LoadGroundRegistrationParams(
+      rclcpp::Node& node);
+  static PlanarRegistrationParams LoadPlanarRegistrationParams(
+      rclcpp::Node& node);
+
+  bool CheckGroundRegistration(const GroundRegistrationResult& res);
+
+  double NormalizeAngle(double a);
 };

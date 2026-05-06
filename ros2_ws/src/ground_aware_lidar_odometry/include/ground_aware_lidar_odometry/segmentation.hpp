@@ -34,6 +34,7 @@ struct GroundSegmentationParams {
   double min_range = 2.0;
   double max_range = 80.0;
   double ground_height_threshold = 0.20;
+  double ground_min_height = -0.15;
   int min_points_per_cell = 5;
 };
 struct GroundPatchParams {
@@ -41,7 +42,7 @@ struct GroundPatchParams {
   int min_points = 30;
   double max_thickness = 0.2;
   double min_normal_z = 0.90;  // ~30° slope
-  double min_planarity = 0.4;
+  double max_surface_variation = 0.03;
 };
 struct GroundRegistrationParams {
   double max_match_distance = 2.0;
@@ -60,6 +61,7 @@ struct GroundRegistrationParams {
   double imu_pitch_weight = 100.0;
   bool use_imu_prior = true;
   int log_throttle = 2000;  // ms
+  double max_match_z_difference = 0.8;
 };
 
 struct PlanarRegistrationParams {
@@ -84,6 +86,26 @@ struct PlanarRegistrationParams {
 struct GridCell {
   int count = 0;
   double min_z = std::numeric_limits<double>::infinity();
+  // double max_z = -std::numeric_limits<double>::infinity();
+
+  std::vector<double> zs;
+
+  void CellGroundZ() {
+    if (zs.empty()) {
+      min_z = std::numeric_limits<double>::quiet_NaN();
+      return;
+    }
+
+    std::sort(zs.begin(), zs.end());
+
+    size_t k = static_cast<size_t>(0.20 * static_cast<double>(zs.size()));
+    k = std::min(k, zs.size() - 1);
+    min_z = zs[k];
+
+    // size_t m = static_cast<size_t>(0.80 * static_cast<double>(zs.size()));
+    // m = std::min(m, zs.size() - 1);
+    // max_z = zs[m];
+  }
 };
 
 struct PatchCell {
@@ -124,7 +146,7 @@ struct GroundPatch {
   Eigen::Vector3d centroid;
   Eigen::Vector3d normal;
   Eigen::Matrix3d covariance;
-  double planarity = 0.0;
+  double surface_variation = 0.0;
   double weight = 1.0;
   int support = 0;
   CellKey key;

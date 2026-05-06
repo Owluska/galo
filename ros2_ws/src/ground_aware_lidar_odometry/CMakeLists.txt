@@ -31,6 +31,7 @@ set(LIB_SOURCES
   src/library/deskew.cpp
   src/library/segmentation.cpp
   src/library/utils.cpp
+  src/library/params.cpp
 )
 
 # Manually specify GeographicLib
@@ -70,9 +71,13 @@ target_link_libraries(node
 
 target_compile_definitions(node PUBLIC ${PCL_DEFINITIONS})
 
-install(TARGETS
-  node
+install(
+  TARGETS node
   DESTINATION lib/${PROJECT_NAME}
+)
+install(
+  DIRECTORY launch config
+  DESTINATION share/${PROJECT_NAME}
 )
 
 install(DIRECTORY include/
