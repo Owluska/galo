@@ -33,6 +33,7 @@ set(LIB_SOURCES
   src/library/utils.cpp
   src/library/params.cpp
   src/library/simple_gnss_converter.cpp
+  src/library/prediction.cpp
 )
 
 # Manually specify GeographicLib

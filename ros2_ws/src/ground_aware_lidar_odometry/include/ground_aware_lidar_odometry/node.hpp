@@ -14,17 +14,21 @@
 #include <tuple>
 
 #include "common_msgs/msg/pure_state.hpp"
+#include "common_msgs/msg/wheel_speed.hpp"
 #include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "ground_aware_lidar_odometry/deskew.hpp"
+#include "ground_aware_lidar_odometry/prediction.hpp"
 #include "ground_aware_lidar_odometry/segmentation.hpp"
 #include "ground_aware_lidar_odometry/simple_gnss_converter.hpp"
 #include "qarl_msgs/msg/nmea_gga.hpp"
 #include "qarl_msgs/msg/orientation_stamped.hpp"
+#include "qarl_msgs/msg/w_angle_feedback.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "std_msgs/msg/float32.hpp"
 
 namespace {
 
@@ -115,6 +119,7 @@ class GALONode : public rclcpp::Node {
   bool has_latest_R_map_base_ = false;
   bool has_prev_lidar_pose_for_prediction_ = false;
   double prev_lidar_pose_time_ = 0.0;
+  double last_wa_ = 0;
   std::mutex mut_;
 
   GALONodeParams node_params_;
@@ -125,11 +130,17 @@ class GALONode : public rclcpp::Node {
   PlanarRegistrationParams planar_registration_params_;
   GroundRegistrationGatePrms ground_reg_gate_params_;
   GnssLocalizationParams gnss_loc_params_;
+  PredictionParams prediction_params_;
+
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<qarl_msgs::msg::NmeaGGA>::SharedPtr gnss_sub_;
+  rclcpp::Subscription<qarl_msgs::msg::WAngleFeedback>::SharedPtr wa_sub_;
+  rclcpp::Subscription<common_msgs::msg::WheelSpeed>::SharedPtr
+      wheel_speed_sub_;
   rclcpp::Subscription<qarl_msgs::msg::OrientationStamped>::SharedPtr
       gnss_orientation_sub_;
+
   rclcpp::Subscription<common_msgs::msg::PureState>::SharedPtr pure_state_sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskew_cld_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr colored_pub_;
@@ -144,6 +155,7 @@ class GALONode : public rclcpp::Node {
       gnss_imu_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       lidar_pose_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr speed_pub_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -166,18 +178,22 @@ class GALONode : public rclcpp::Node {
   std::deque<std::vector<Eigen::Vector2d>> objects_map_frames_;
 
   GnssData gnss_data_;
+  WheelSpeedAngleData wheel_data;
   GnssLocalConverter gnss_converter_;
   DeskewAlgorithm deskew_algo_;
   Segmentation segmentation_;
   GroundPatchExtractor ground_patches_extractor_;
   GroundRegistration ground_registration_;
   PlanarRegistration planar_registration_;
+  PositionPredictor position_predictor_;
 
   void LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg);
   void GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg);
   void GnssYawCb(const qarl_msgs::msg::OrientationStamped::SharedPtr msg);
   void PureStateCb(const common_msgs::msg::PureState::SharedPtr msg);
+  void WheelSpeedCb(const common_msgs::msg::WheelSpeed::SharedPtr msg);
+  void WheelAngleCb(const qarl_msgs::msg::WAngleFeedback::SharedPtr msg);
 
   void PrintTimeMeasurments(const std::vector<TimeMeasurments_t>& measurments);
 
@@ -200,7 +216,8 @@ class GALONode : public rclcpp::Node {
       const Eigen::Vector<double, 6>& sigmas);
   Eigen::Vector3d MergeGroundAndPlanarTranslation(
       const Eigen::Vector3d& t_ground, const Eigen::Vector3d& t_prior,
-      const Eigen::Vector2d& t_planar, double alpha_z = 0.3);
+      const Eigen::Vector2d& t_planar, double alpha_xy = 0.3,
+      double alpha_z = 0.3);
 
   Eigen::Matrix3d MergeGroundAndPlanarRotation(const Eigen::Matrix3d& R_ground,
                                                const Eigen::Matrix3d& R_prior,

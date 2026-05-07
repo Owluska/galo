@@ -1,3 +1,5 @@
+#pragma once
+
 #include <GeographicLib/UTMUPS.hpp>
 
 #include "ground_aware_lidar_odometry/utils.hpp"
