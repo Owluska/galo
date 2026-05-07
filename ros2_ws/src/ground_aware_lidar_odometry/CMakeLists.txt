@@ -32,6 +32,7 @@ set(LIB_SOURCES
   src/library/segmentation.cpp
   src/library/utils.cpp
   src/library/params.cpp
+  src/library/simple_gnss_converter.cpp
 )
 
 # Manually specify GeographicLib

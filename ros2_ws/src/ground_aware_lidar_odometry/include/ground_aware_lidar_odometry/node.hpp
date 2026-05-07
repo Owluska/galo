@@ -13,11 +13,13 @@
 #include <thread>
 #include <tuple>
 
+#include "common_msgs/msg/pure_state.hpp"
 #include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "ground_aware_lidar_odometry/deskew.hpp"
 #include "ground_aware_lidar_odometry/segmentation.hpp"
+#include "ground_aware_lidar_odometry/simple_gnss_converter.hpp"
 #include "qarl_msgs/msg/nmea_gga.hpp"
 #include "qarl_msgs/msg/orientation_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -49,6 +51,19 @@ struct LidarCovariance {
   double scale = 1.0;
   double roll = 0.5;   // rad^2
   double pitch = 0.5;  // rad^2
+
+  std::tuple<double, double> GetXYYawSigmas(
+      const PlanarRegistrationResult& res) {
+    auto scale = 1;
+    // worse if residual high
+    scale *= std::clamp(res.mean_residual / 0.1, 1.0, 5.0);
+    // worse if few matches
+    scale *= std::clamp(100.0 / std::max(res.matches, 1), 1.0, 3.0);
+
+    double sigma_xy = base_xy * scale;
+    double sigma_yaw = 2.0 * M_PI / 180.0 * scale;  // 2 deg base
+    return std::make_tuple(sigma_xy, sigma_yaw);
+  }
 };
 
 struct GALONodeParams {
@@ -70,12 +85,11 @@ struct GroundPatchFrame {
 };
 
 struct GnssData {
-  Eigen::Vector3d gnss_origin_;
   Eigen::Vector3d gnss_local_;
   double yaw;
-  bool has_gnss_origin_ = false;
   bool has_gnss_position_ = false;
   bool has_gnss_yaw = false;
+  double nmea_time = 0;
 };
 
 struct GroundRegistrationGatePrms {
@@ -99,7 +113,8 @@ class GALONode : public rclcpp::Node {
   bool has_lidar_imu_prev_ = false;
   bool has_lidar_odom_initialized_from_gnss_ = false;
   bool has_latest_R_map_base_ = false;
-
+  bool has_prev_lidar_pose_for_prediction_ = false;
+  double prev_lidar_pose_time_ = 0.0;
   std::mutex mut_;
 
   GALONodeParams node_params_;
@@ -109,18 +124,21 @@ class GALONode : public rclcpp::Node {
   GroundRegistrationParams ground_registration_params_;
   PlanarRegistrationParams planar_registration_params_;
   GroundRegistrationGatePrms ground_reg_gate_params_;
+  GnssLocalizationParams gnss_loc_params_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<qarl_msgs::msg::NmeaGGA>::SharedPtr gnss_sub_;
   rclcpp::Subscription<qarl_msgs::msg::OrientationStamped>::SharedPtr
       gnss_orientation_sub_;
-
+  rclcpp::Subscription<common_msgs::msg::PureState>::SharedPtr pure_state_sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskew_cld_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr colored_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       ground_patches_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr translation_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr gt_eulers_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr
+      pure_state_eulers_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr est_eulers_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       gnss_imu_pose_pub_;
@@ -132,6 +150,8 @@ class GALONode : public rclcpp::Node {
 
   Eigen::Vector3d t_map_lidar_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d t_il, t_pos_lidar;
+  Eigen::Vector3d prev_t_map_lidar_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d velocity_map_lidar_ = Eigen::Vector3d::Zero();
 
   Eigen::Quaterniond imu_q_prev_, q_il, q_i_map, imu_q_lidar_prev_, q_pos_lidar;
   Eigen::Matrix3d R_imu_delta;
@@ -146,9 +166,9 @@ class GALONode : public rclcpp::Node {
   std::deque<std::vector<Eigen::Vector2d>> objects_map_frames_;
 
   GnssData gnss_data_;
+  GnssLocalConverter gnss_converter_;
   DeskewAlgorithm deskew_algo_;
   Segmentation segmentation_;
-
   GroundPatchExtractor ground_patches_extractor_;
   GroundRegistration ground_registration_;
   PlanarRegistration planar_registration_;
@@ -157,12 +177,11 @@ class GALONode : public rclcpp::Node {
   void ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg);
   void GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg);
   void GnssYawCb(const qarl_msgs::msg::OrientationStamped::SharedPtr msg);
+  void PureStateCb(const common_msgs::msg::PureState::SharedPtr msg);
 
   void PrintTimeMeasurments(const std::vector<TimeMeasurments_t>& measurments);
 
   void ProcessCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
-  std::tuple<double, double, double> EulersFromMatrixSimple(
-      const Eigen::Matrix3d& R);
   bool GetExtrinsicTf(tf2_ros::Buffer& tf_buffer, const std::string& imu_frame,
                       const std::string& lidar_frame);
   std::optional<Eigen::Quaterniond> GetImuOrientationAt(
@@ -175,6 +194,10 @@ class GALONode : public rclcpp::Node {
       const Eigen::Vector3d& t);
   void RebuildGroundMap();
   void RebuildObjectsMap();
+  geometry_msgs::msg::PoseWithCovarianceStamped BuildPoseWithCovarianceMsg(
+      const builtin_interfaces::msg::Time& time, const std::string& frame,
+      const Eigen::Matrix3d& R, const Eigen::Vector3d& t,
+      const Eigen::Vector<double, 6>& sigmas);
   Eigen::Vector3d MergeGroundAndPlanarTranslation(
       const Eigen::Vector3d& t_ground, const Eigen::Vector3d& t_prior,
       const Eigen::Vector2d& t_planar, double alpha_z = 0.3);
@@ -184,6 +207,7 @@ class GALONode : public rclcpp::Node {
                                                const Eigen::Matrix2d& R_planar,
                                                double alpha_rp = 0.2);
   bool TryInitializeOdomFromGnss();
+  bool CheckGroundRegistration(const GroundRegistrationResult& res);
 
   static GALONodeParams LoadNodeParams(rclcpp::Node& node);
   static DeskewParams LoadDeskewParams(rclcpp::Node& node);
@@ -194,8 +218,5 @@ class GALONode : public rclcpp::Node {
       rclcpp::Node& node);
   static PlanarRegistrationParams LoadPlanarRegistrationParams(
       rclcpp::Node& node);
-
-  bool CheckGroundRegistration(const GroundRegistrationResult& res);
-
-  double NormalizeAngle(double a);
+  static GnssLocalizationParams LoadGnssParams(rclcpp::Node& node);
 };

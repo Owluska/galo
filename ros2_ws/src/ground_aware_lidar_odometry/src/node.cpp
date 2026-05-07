@@ -8,6 +8,8 @@ GALONode::GALONode()
       ground_patch_params_(LoadGroundPatchParams(*this)),
       ground_registration_params_(LoadGroundRegistrationParams(*this)),
       planar_registration_params_(LoadPlanarRegistrationParams(*this)),
+      gnss_loc_params_(LoadGnssParams(*this)),
+      gnss_converter_(gnss_loc_params_),
       segmentation_(segementation_params_),
       ground_patches_extractor_(ground_patch_params_),
       ground_registration_(ground_registration_params_, this->get_logger(),
@@ -38,7 +40,9 @@ GALONode::GALONode()
       this->create_subscription<qarl_msgs::msg::OrientationStamped>(
           "/Sensor/gnss/orientation", 1,
           std::bind(&GALONode::GnssYawCb, this, std::placeholders::_1));
-
+  pure_state_sub_ = this->create_subscription<common_msgs::msg::PureState>(
+      "/SC/pure_state", 1,
+      std::bind(&GALONode::PureStateCb, this, std::placeholders::_1));
   deskew_cld_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/GALO/deskewed_cloud", 1);
   colored_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -52,6 +56,8 @@ GALONode::GALONode()
       this->create_publisher<geometry_msgs::msg::Point>("/GALO/gt_eulers", 1);
   est_eulers_pub_ =
       this->create_publisher<geometry_msgs::msg::Point>("/GALO/est_eulers", 1);
+  pure_state_eulers_pub_ = this->create_publisher<geometry_msgs::msg::Point>(
+      "/GALO/pure_state_eulers", 1);
 
   gnss_imu_pose_pub_ =
       this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
@@ -159,6 +165,20 @@ bool GALONode::TryInitializeOdomFromGnss() {
   return true;
 }
 
+void GALONode::PureStateCb(const common_msgs::msg::PureState::SharedPtr msg) {
+  Eigen::Quaterniond q =
+      Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x,
+                         msg->pose.orientation.y, msg->pose.orientation.z);
+  q.normalize();
+  auto [roll, pitch, yaw] = EulersFromMatrixSimple(q.toRotationMatrix());
+
+  geometry_msgs::msg::Point eulers_msg;
+  eulers_msg.x = roll;
+  eulers_msg.y = pitch;
+  eulers_msg.z = yaw;
+  pure_state_eulers_pub_->publish(eulers_msg);
+}
+
 void GALONode::GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg) {
   // Only use high-quality GNSS fixes.
   // gps_qual >= 4 usually means RTK fixed / high-confidence solution.
@@ -166,43 +186,12 @@ void GALONode::GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg) {
     return;
   }
 
-  double northing = 0.0;
-  double easting = 0.0;
-  std::string zone;
-
-  // Convert latitude/longitude to UTM.
-  //
-  // robot_localization::navsat_conversions::LLtoUTM returns:
-  //   northing: UTM northing
-  //   easting:  UTM easting
-  //
-  // We store the position as:
-  //   x = easting
-  //   y = northing
-  //   z = altitude
-  robot_localization::navsat_conversions::LLtoUTM(msg->lat, msg->lon, northing,
-                                                  easting, zone);
-
-  Eigen::Vector3d gnss_utm(easting, northing, msg->altitude);
+  Eigen::Vector3d gnss_local =
+      gnss_converter_.ToLocal(msg->lon, msg->lat, msg->altitude);
 
   std::lock_guard<std::mutex> lock(mut_);
-
-  // The first valid GNSS sample defines the local map origin.
-  //
-  // After this, all GNSS positions are expressed in a local ENU-like frame:
-  //
-  //   gnss_local = gnss_utm - gnss_origin
-  //
-  // This keeps numbers small and avoids large UTM coordinates in odometry.
-  if (!gnss_data_.has_gnss_origin_) {
-    gnss_data_.gnss_origin_ = gnss_utm;
-    gnss_data_.has_gnss_origin_ = true;
-  }
-
-  // Current GNSS antenna position in the local map frame.
-  //
-  // This is the position of the GNSS position antenna, not the LiDAR.
-  gnss_data_.gnss_local_ = gnss_utm - gnss_data_.gnss_origin_;
+  gnss_data_.nmea_time = rclcpp::Time(msg->header.stamp).seconds();
+  gnss_data_.gnss_local_ = gnss_local;
   gnss_data_.has_gnss_position_ = true;
 }
 
@@ -220,11 +209,11 @@ void GALONode::GnssYawCb(
   // 3. GNSS origin, because GNSS local coordinates are only meaningful
   //    after the first valid GNSS position has initialized the origin.
   if (!GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame) ||
-      imu_orientation_queue_.Size() < 2 || !gnss_data_.has_gnss_origin_) {
+      imu_orientation_queue_.Size() < 2) {
     return;
   }
 
-  const double gnss_time = rclcpp::Time(msg->header.stamp).seconds();
+  const double yaw_time = rclcpp::Time(msg->header.stamp).seconds();
 
   // Find IMU orientation at the GNSS heading timestamp.
   //
@@ -232,11 +221,10 @@ void GALONode::GnssYawCb(
   std::optional<Eigen::Quaterniond> q_closest;
   {
     std::lock_guard<std::mutex> lock(mut_);
-    q_closest = GetImuOrientationAt(gnss_time);
+    q_closest = GetImuOrientationAt(yaw_time);
   }
 
   if (!q_closest) {
-    // Usually this means GNSS timestamp is outside the buffered IMU range.
     return;
   }
 
@@ -245,6 +233,14 @@ void GALONode::GnssYawCb(
     std::lock_guard<std::mutex> lock(mut_);
 
     if (!gnss_data_.has_gnss_position_) {
+      return;
+    }
+    double pos_time = gnss_data_.nmea_time;
+
+    if (std::abs(yaw_time - pos_time) > 0.3) {
+      RCLCPP_WARN(this->get_logger(),
+                  "GNSS position/yaw timestamp mismatch: %.3f s",
+                  std::abs(yaw_time - pos_time));
       return;
     }
 
@@ -261,43 +257,11 @@ void GALONode::GnssYawCb(
   //
   // ROS ENU yaw convention:
   //   yaw = counter-clockwise from East
-  //
-  // Conversion:
-  //   yaw_enu = pi/2 - heading
-  const double heading_deg = msg->orientation.yaw;
-  const double heading_rad = heading_deg * M_PI / 180.0;
-
-  double yaw_enu = M_PI / 2.0 - heading_rad;
-  yaw_enu = std::atan2(std::sin(yaw_enu), std::cos(yaw_enu));
-
-  // --------------------------------------------------------------------------
-  // 2. Convert dual-antenna baseline yaw to base_link yaw
-  // --------------------------------------------------------------------------
-  //
-  // Your TFs:
-  //
-  //   pos_antenna:
-  //     translation: [3.0,  3.0, 4.2]
-  //
-  //   orientation_antenna:
-  //     translation: [3.0, -3.0, 4.2]
-  //
-  // Therefore the baseline from orientation_antenna to pos_antenna is:
-  //
-  //   [0, 6, 0] in base_link
-  //
-  // That points along +Y_base, not +X_base.
-  //
-  // If the GNSS orientation message gives the heading of that baseline,
-  // then yaw_enu is the heading of +Y_base.
-  //
-  // ROS/base yaw normally describes +X_base.
-  //
-  // Since +Y_base is +90 deg from +X_base:
-  //
-  //   yaw_base = yaw_baseline - pi/2
-  double yaw_base_enu = yaw_enu - M_PI / 2.0;
-  yaw_base_enu = std::atan2(std::sin(yaw_base_enu), std::cos(yaw_base_enu));
+  double gnss_yaw = gnss_converter_.YawFromGnssHeading(msg->orientation.yaw);
+  // RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+  //                      "GNSS yaw raw=%.3f deg, converted=%.3f rad %.3f deg",
+  //                      msg->orientation.yaw, gnss_yaw, gnss_yaw * 180.0 /
+  //                      M_PI);
 
   // --------------------------------------------------------------------------
   // 3. Get roll/pitch from IMU
@@ -318,22 +282,6 @@ void GALONode::GnssYawCb(
   //
   // From this, we only keep roll and pitch.
   // GNSS yaw replaces the IMU yaw.
-
-  // debug debug debug
-  // auto [r_raw, p_raw, y_raw] =
-  //     EulersFromMatrixSimple(q_closest->toRotationMatrix());
-
-  // Eigen::Matrix3d R_map_imu_like =
-  //     q_i_map.toRotationMatrix() * q_closest->toRotationMatrix();
-
-  // auto [r_corr, p_corr, y_corr] = EulersFromMatrixSimple(R_map_imu_like);
-
-  // RCLCPP_WARN_THROTTLE(
-  //     this->get_logger(), *this->get_clock(), 1000,
-  //     "IMU rpy raw=[%.2f %.2f %.2f] corrected=[%.2f %.2f %.2f] deg",
-  //     r_raw * 180.0 / M_PI, p_raw * 180.0 / M_PI, y_raw * 180.0 / M_PI,
-  //     r_corr * 180.0 / M_PI, p_corr * 180.0 / M_PI, y_corr * 180.0 / M_PI);
-  // debug
   Eigen::Matrix3d R_map_imu_like =
       q_i_map.toRotationMatrix() * q_closest->toRotationMatrix();
 
@@ -360,7 +308,7 @@ void GALONode::GnssYawCb(
   //   R = Rz(yaw) * Ry(pitch) * Rx(roll)
   Eigen::AngleAxisd roll_rot(roll_imu, Eigen::Vector3d::UnitX());
   Eigen::AngleAxisd pitch_rot(pitch_imu, Eigen::Vector3d::UnitY());
-  Eigen::AngleAxisd yaw_rot(yaw_base_enu, Eigen::Vector3d::UnitZ());
+  Eigen::AngleAxisd yaw_rot(gnss_yaw, Eigen::Vector3d::UnitZ());
 
   Eigen::Matrix3d R_map_base = yaw_rot.toRotationMatrix() *
                                pitch_rot.toRotationMatrix() *
@@ -383,7 +331,7 @@ void GALONode::GnssYawCb(
   //   R_map_lidar = R_map_pos * R_pos_lidar
   //   t_map_lidar = t_map_pos + R_map_pos * t_pos_lidar
   //
-  // Since pos_antenna has identity rotation relative to base_link in your TF,
+  // Since pos_antenna has identity rotation relative to base_link in TF,
   // we can use:
   //
   //   R_map_pos = R_map_base
@@ -398,59 +346,35 @@ void GALONode::GnssYawCb(
   Eigen::Vector3d t_map_lidar_gt = gnss_local + R_map_base * t_pos_lidar_local;
 
   // --------------------------------------------------------------------------
-  // 6. Publish LiDAR GT pose
+  // 5. Publish LiDAR GT pose
   // --------------------------------------------------------------------------
-  geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
-  pose_msg.header.stamp = msg->header.stamp;
-  pose_msg.header.frame_id = "gnss_map";
-
-  pose_msg.pose.pose.position.x = t_map_lidar_gt.x();
-  pose_msg.pose.pose.position.y = t_map_lidar_gt.y();
-  pose_msg.pose.pose.position.z = t_map_lidar_gt.z();
-
-  auto [roll_gt, pitch_gt, yaw_gt] = EulersFromMatrixSimple(R_map_lidar_gt);
-
-  tf2::Quaternion q;
-  q.setRPY(roll_gt, pitch_gt, yaw_gt);
-  q.normalize();
-
-  pose_msg.pose.pose.orientation = tf2::toMsg(q);
-
-  auto& cov = pose_msg.pose.covariance;
-  std::fill(cov.begin(), cov.end(), 0.0);
-
-  cov[0] = node_params_.gt_cov_.x_precision * node_params_.gt_cov_.x_precision;
-
-  cov[7] = node_params_.gt_cov_.y_precision * node_params_.gt_cov_.y_precision;
-
-  cov[14] = node_params_.gt_cov_.z_precision * node_params_.gt_cov_.z_precision;
-
-  cov[21] = std::pow(node_params_.gt_cov_.roll_precision * M_PI / 180.0, 2.0);
-  cov[28] = std::pow(node_params_.gt_cov_.pitch_precision * M_PI / 180.0, 2.0);
-  cov[35] = std::pow(node_params_.gt_cov_.yaw_precision * M_PI / 180.0, 2.0);
-
+  Eigen::Vector<double, 6> sigmas = Eigen::Vector<double, 6>(
+      node_params_.gt_cov_.x_precision, node_params_.gt_cov_.y_precision,
+      node_params_.gt_cov_.z_precision,
+      node_params_.gt_cov_.roll_precision * M_PI / 180.0,
+      node_params_.gt_cov_.pitch_precision * M_PI / 180.0,
+      node_params_.gt_cov_.yaw_precision * M_PI / 180.0);
+  geometry_msgs::msg::PoseWithCovarianceStamped pose_msg =
+      BuildPoseWithCovarianceMsg(msg->header.stamp, "gnss_map", R_map_lidar_gt,
+                                 t_map_lidar_gt, sigmas);
   gnss_imu_pose_pub_->publish(pose_msg);
 
+  auto [roll_gt, pitch_gt, yaw_gt] = EulersFromMatrixSimple(R_map_lidar_gt);
   geometry_msgs::msg::Point eulers_msg;
   eulers_msg.x = roll_gt;
   eulers_msg.y = pitch_gt;
-  eulers_msg.z = yaw_gt;
+  eulers_msg.z = NormalizeAngle0To2Pi(yaw_gt);
   gt_eulers_pub_->publish(eulers_msg);
 
   // --------------------------------------------------------------------------
   // 7. Store GNSS yaw for odometry initialization
   // --------------------------------------------------------------------------
-  //
-  // Important:
-  //
-  // Store base yaw, not LiDAR yaw.
-  //
   // TryInitializeOdomFromGnss() should use this yaw as map <- base/pos_antenna,
   // and then compose with pos_antenna <- lidar.
   {
     std::lock_guard<std::mutex> lock(mut_);
 
-    gnss_data_.yaw = yaw_base_enu;
+    gnss_data_.yaw = gnss_yaw;
     gnss_data_.has_gnss_yaw = true;
 
     latest_R_map_base_ = R_map_base;
@@ -605,14 +529,23 @@ void GALONode::ProcessCloud(
   Eigen::Matrix3d R_imu_prior_map = R_map_lidar_ * R_lidar_delta;
 
   // Planar initial guess from current global pose
-  double yaw_initial = std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0));
+  double yaw_initial = std::atan2(R_imu_prior_map(1, 0), R_imu_prior_map(0, 0));
   double c = std::cos(yaw_initial);
   double s = std::sin(yaw_initial);
 
   Eigen::Matrix2d R_planar_initial;
   R_planar_initial << c, -s, s, c;
 
-  Eigen::Vector2d t_planar_initial(t_map_lidar_.x(), t_map_lidar_.y());
+  Eigen::Vector3d t_pred = t_map_lidar_;
+
+  if (has_prev_lidar_pose_for_prediction_) {
+    double dt = lidar_time - prev_lidar_pose_time_;
+    if (dt > 1e-3 && dt < 0.5) {
+      t_pred = t_map_lidar_ + velocity_map_lidar_ * dt;
+    }
+  }
+
+  Eigen::Vector2d t_planar_initial(t_pred.x(), t_pred.y());
 
   PlanarRegistrationResult planar_reg_res;
   {
@@ -626,19 +559,11 @@ void GALONode::ProcessCloud(
   {
     TimeMeasurments_t meas("ground_registration");
     ground_reg_result = ground_registration_.Align(
-        ground_map_, cur_patches, R_imu_prior_map, R_map_lidar_, t_map_lidar_);
+        ground_map_, cur_patches, R_imu_prior_map, R_map_lidar_, t_pred);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
-  // if (node_params_.debug) {
-  //   RCLCPP_WARN_THROTTLE(
-  //       this->get_logger(), *this->get_clock(), 2000,
-  //       "Planar valid=%d matches=%d residual=%.3f t=[%.3f %.3f] yaw=%.3f",
-  //       planar_reg_res.valid, planar_reg_res.matches,
-  //       planar_reg_res.mean_residual, planar_reg_res.t.x(),
-  //       planar_reg_res.t.y(),
-  //       std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0)));
-  // }
+
   if (!planar_reg_res.valid) {
     RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,
@@ -659,12 +584,12 @@ void GALONode::ProcessCloud(
     // from IMU prior.
     double yaw = std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
 
-    // auto [roll_prior, pitch_prior, yaw_prior_unused] =
-    //     EulersFromMatrixSimple(R_imu_prior_map);
-    // (void)yaw_prior_unused;
     auto [roll_prior, pitch_prior, yaw_prior_unused] =
-        EulersFromMatrixSimple(R_map_lidar_);
+        EulersFromMatrixSimple(R_imu_prior_map);
     (void)yaw_prior_unused;
+    // auto [roll_prior, pitch_prior, yaw_prior_unused] =
+    //     EulersFromMatrixSimple(R_map_lidar_);
+    // (void)yaw_prior_unused;
 
     R_abs =
         Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix() *
@@ -679,6 +604,14 @@ void GALONode::ProcessCloud(
   }
   R_map_lidar_ = R_abs;
   t_map_lidar_ = t_abs;
+  double dt_pose = lidar_time - prev_lidar_pose_time_;
+  if (has_prev_lidar_pose_for_prediction_ && dt_pose > 1e-3 && dt_pose < 0.5) {
+    velocity_map_lidar_ = (t_abs - prev_t_map_lidar_) / dt_pose;
+  }
+
+  prev_t_map_lidar_ = t_abs;
+  prev_lidar_pose_time_ = lidar_time;
+  has_prev_lidar_pose_for_prediction_ = true;
   auto planar_points_in_map =
       TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar_);
 
@@ -688,15 +621,8 @@ void GALONode::ProcessCloud(
     objects_map_frames_.pop_front();
   }
   RebuildObjectsMap();
-  // RCLCPP_WARN_THROTTLE(
-  //     this->get_logger(), *this->get_clock(), 1000,
-  //     "patches current=%zu, ground_map=%zu, ground_map_frames=%zu, objects "
-  //     "current=%zu, objects_map=%zu, objects_map_frames=%zu",
-  //     cur_patches.size(), ground_map_.size(), ground_map_frames_.size(),
-  //     cur_planar_points.size(), objects_map_.size(),
-  //     objects_map_frames_.size());
 
-  if (cur_patches.size() >= 30 && planar_reg_res.valid) {
+  if (cur_patches.size() >= 6 && planar_reg_res.valid) {
     auto patches_in_map =
         TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar_);
 
@@ -708,44 +634,18 @@ void GALONode::ProcessCloud(
     RebuildGroundMap();
   }
 
-  // RCLCPP_WARN_THROTTLE(
-  //   this->get_logger(), *this->get_clock(), 1000,
-  //   "after map update: ground_map=%zu, ground_map_frames=%zu, "
-  //   "objects_map=%zu, objects_map_frames=%zu",
-  //   ground_map_.size(), ground_map_frames_.size(), objects_map_.size(),
-  //   objects_map_frames_.size());
-  geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
-  pose_msg.header.frame_id = "gnss_map";
-  pose_msg.header.stamp = msg->header.stamp;
+  const auto& [sigma_xy, sigma_yaw] =
+      node_params_.est_cov_.GetXYYawSigmas(planar_reg_res);
 
-  pose_msg.pose.pose.position.x = t_abs.x();
-  pose_msg.pose.pose.position.y = t_abs.y();
-  pose_msg.pose.pose.position.z = t_abs.z();
-  auto [roll_abs, pitch_abs, yaw_abs] = EulersFromMatrixSimple(R_abs);
-  tf2::Quaternion q;
-  q.setRPY(roll_abs, pitch_abs, yaw_abs);
-  q.normalize();
-  pose_msg.pose.pose.orientation = tf2::toMsg(q);
-
-  auto scale = 1;
-  // worse if residual high
-  scale *= std::clamp(planar_reg_res.mean_residual / 0.1, 1.0, 5.0);
-  // worse if few matches
-  scale *= std::clamp(100.0 / std::max(planar_reg_res.matches, 1), 1.0, 3.0);
-
-  double sigma_xy = node_params_.est_cov_.base_xy * scale;
-  double sigma_yaw = 2.0 * M_PI / 180.0 * scale;  // 2 deg base
-  auto& cov = pose_msg.pose.covariance;
-  cov[0] = sigma_xy * sigma_xy;
-  cov[7] = sigma_xy * sigma_xy;
-  cov[14] = node_params_.est_cov_.z *
-            node_params_.est_cov_.z;  // z less reliable in LiDAR planar
-
-  cov[21] = node_params_.est_cov_.roll;   // roll (weak)
-  cov[28] = node_params_.est_cov_.pitch;  // pitch
-  cov[35] = sigma_yaw * sigma_yaw;
+  Eigen::Vector<double, 6> sigmas = Eigen::Vector<double, 6>(
+      sigma_xy, sigma_xy, node_params_.est_cov_.z, node_params_.est_cov_.roll,
+      node_params_.est_cov_.pitch, sigma_yaw);
+  geometry_msgs::msg::PoseWithCovarianceStamped pose_msg =
+      BuildPoseWithCovarianceMsg(msg->header.stamp, "gnss_map", R_abs, t_abs,
+                                 sigmas);
   lidar_pose_pub_->publish(pose_msg);
 
+  auto [roll_abs, pitch_abs, yaw_abs] = EulersFromMatrixSimple(R_abs);
   geometry_msgs::msg::Point eulers_msg;
   eulers_msg.x = roll_abs;
   eulers_msg.y = pitch_abs;
@@ -794,15 +694,6 @@ void GALONode::PrintTimeMeasurments(
   }
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "%s",
                        ss.str().c_str());
-}
-
-std::tuple<double, double, double> GALONode::EulersFromMatrixSimple(
-    const Eigen::Matrix3d& R) {
-  double roll = std::atan2(R(2, 1), R(2, 2));
-  double pitch =
-      std::atan2(-R(2, 0), std::sqrt(R(2, 1) * R(2, 1) + R(2, 2) * R(2, 2)));
-  double yaw = std::atan2(R(1, 0), R(0, 0));
-  return std::make_tuple(roll, pitch, yaw);
 }
 
 std::optional<Eigen::Quaterniond> GALONode::GetImuOrientationAt(
@@ -918,8 +809,39 @@ Eigen::Vector3d GALONode::MergeGroundAndPlanarTranslation(
   return t;
 }
 
-double GALONode::NormalizeAngle(double a) {
-  return std::atan2(std::sin(a), std::cos(a));
+geometry_msgs::msg::PoseWithCovarianceStamped
+GALONode::BuildPoseWithCovarianceMsg(const builtin_interfaces::msg::Time& time,
+                                     const std::string& frame,
+                                     const Eigen::Matrix3d& R,
+                                     const Eigen::Vector3d& t,
+                                     const Eigen::Vector<double, 6>& sigmas) {
+  geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
+  pose_msg.header.stamp = time;
+  pose_msg.header.frame_id = frame;
+
+  pose_msg.pose.pose.position.x = t.x();
+  pose_msg.pose.pose.position.y = t.y();
+  pose_msg.pose.pose.position.z = t.z();
+
+  auto [roll, pitch, yaw] = EulersFromMatrixSimple(R);
+
+  tf2::Quaternion q;
+  q.setRPY(roll, pitch, yaw);
+  q.normalize();
+
+  pose_msg.pose.pose.orientation = tf2::toMsg(q);
+
+  auto& cov = pose_msg.pose.covariance;
+  std::fill(cov.begin(), cov.end(), 0.0);
+
+  cov[0] = std::pow(sigmas(0), 2);
+  cov[7] = std::pow(sigmas(1), 2);
+  cov[14] = std::pow(sigmas(2), 2);
+
+  cov[21] = std::pow(sigmas(3), 2);
+  cov[28] = std::pow(sigmas(4), 2);
+  cov[35] = std::pow(sigmas(5), 2);
+  return pose_msg;
 }
 
 bool GALONode::CheckGroundRegistration(const GroundRegistrationResult& res) {

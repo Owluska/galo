@@ -53,3 +53,12 @@ class FiniteDeque {
 };
 
 std::string VectorToString(const Eigen::VectorXd& vec);
+
+double NormalizeAngle0To2Pi(double a);
+
+double NormalizeAngle(double a);
+
+std::tuple<double, double, double> EulersFromMatrixSimple(
+    const Eigen::Matrix3d& R);
+
+double DegToRad(double deg);

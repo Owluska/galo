@@ -177,3 +177,15 @@ PlanarRegistrationParams GALONode::LoadPlanarRegistrationParams(
 
   return p;
 }
+
+GnssLocalizationParams GALONode::LoadGnssParams(rclcpp::Node& node) {
+  GnssLocalizationParams p;
+
+  p.base_lat =
+      DeclareAndGet<double>(node, "gnss_location.base_lat", p.base_lat);
+  p.base_lon =
+      DeclareAndGet<double>(node, "gnss_location.base_lon", p.base_lon);
+  p.northp = DeclareAndGet<bool>(node, "gnss_location.northp", p.northp);
+  p.zone = DeclareAndGet<int>(node, "gnss_location.zone", p.zone);
+  return p;
+}

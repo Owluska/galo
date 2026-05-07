@@ -1,9 +1,14 @@
 galo:
   ros__parameters:
+    gnss_location:
+      base_lon: 75.46162227777778
+      base_lat: 51.708812183333336
+      utm_zone: 43
+      northp: true
     node:
-      debug: 1
-      max_ground_map_frames: 15
-      max_planar_map_frames: 15
+      debug: 0
+      max_ground_map_frames: 5
+      max_planar_map_frames: 3
 
     frames:
       imu_frame: "imu"
@@ -33,26 +38,26 @@ galo:
       debug: 0
 
     ground_segmentation:
-      cell_size: 1.0
-      min_range: 2.0
-      max_range: 80.0
-      ground_height_threshold: 0.35
-      min_points_per_cell: 3
-      ground_min_height: -0.15
+      cell_size: 1.5
+      min_range: 5.0
+      max_range: 50.0
+      ground_height_threshold: 0.18
+      min_points_per_cell: 4
+      ground_min_height: -0.15 # from local ground Z
 
     ground_patch:
-      cell_size: 4.0
-      min_points: 8
-      max_thickness: 0.35
-      min_normal_z: 0.85
-      max_surface_variation: 0.03
+      cell_size: 10.0
+      min_points: 20
+      max_thickness: 0.40
+      min_normal_z: 0.70
+      max_surface_variation: 0.08
 
     ground_registration:
-      max_match_distance: 5.0
-      min_normal_dot: 0.75
+      max_match_distance: 10.0
+      min_normal_dot: 0.65
       max_iterations: 10
-      min_matches: 10
-      max_dz: 0.1
+      min_matches: 4
+      max_dz: 0.15
       max_roll: 0.02
       max_pitch: 0.02
       damping_z: 0.001
@@ -64,19 +69,19 @@ galo:
       imu_pitch_weight: 100.0
       use_imu_prior: true
       log_throttle: 2000
-      max_match_z_difference: 0.8
+      max_match_z_difference: 1.0
 
     planar_registration:
-      voxel_size: 1.0
-      max_match_distance: 1.0
-      min_points_per_voxel: 8
-      max_iterations: 15
+      voxel_size: 2.0
+      max_match_distance: 2.0
+      min_points_per_voxel: 12
+      max_iterations: 6
       min_matches: 20
       damping: 0.0001
-      max_dx: 1.0
-      max_dy: 1.0
-      max_dyaw: 0.2
-      max_dx_step: 0.5
-      max_dy_step: 0.5
-      max_dyaw_step: 0.1
+      max_dx: 20.0
+      max_dy: 20.0
+      max_dyaw: 1.5
+      max_dx_step: 2.0
+      max_dy_step: 2.0
+      max_dyaw_step: 0.2
       convergence_eps: 0.00001
