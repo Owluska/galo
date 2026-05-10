@@ -9,6 +9,7 @@ GALONode::GALONode()
       ground_registration_params_(LoadGroundRegistrationParams(*this)),
       planar_registration_params_(LoadPlanarRegistrationParams(*this)),
       gnss_loc_params_(LoadGnssParams(*this)),
+      ground_reg_gate_params_(LoadGroundGateParams(*this)),
       position_predictor_(prediction_params_),
       gnss_converter_(gnss_loc_params_),
       segmentation_(segementation_params_),
@@ -79,6 +80,7 @@ void GALONode::WheelAngleCb(
     const qarl_msgs::msg::WAngleFeedback::SharedPtr msg) {
   std::lock_guard<std::mutex> lock(mut_);
   last_wa_ = msg->wangle;
+  WheelSpeedAngleData speed_data;
 }
 
 void GALONode::WheelSpeedCb(const common_msgs::msg::WheelSpeed::SharedPtr msg) {
@@ -88,6 +90,11 @@ void GALONode::WheelSpeedCb(const common_msgs::msg::WheelSpeed::SharedPtr msg) {
   wheel_data.right_speed = msg->rear_right;
   wheel_data.wheel_time = rclcpp::Time(msg->header.stamp).seconds();
   wheel_data.has_wheel_data = true;
+  RearWheelSpeedResult speed_res =
+      position_predictor_.EstimateRearAxleSpeed(wheel_data);
+  if (speed_res.valid) {
+    deskew_algo_.UpdateSpeedQueue(speed_res.speed, wheel_data.wheel_time);
+  }
 }
 
 void GALONode::PureStateCb(const common_msgs::msg::PureState::SharedPtr msg) {
@@ -362,7 +369,8 @@ void GALONode::ProcessCloud(
     std::lock_guard<std::mutex> lock(mut_);
 
     deskew_algo_.UpdateLidarQueue(msg);
-    deskewed = deskew_algo_.ProcessCloudsQueue();
+    deskewed =
+        deskew_algo_.ProcessCloudsQueue(q_lidar_body_.toRotationMatrix());
 
     meas.SetEnd();
     time_measurments.push_back(meas);
@@ -500,27 +508,53 @@ void GALONode::ProcessCloud(
   speed_msg.data = pred.speed;
   speed_pub_->publish(speed_msg);
 
-  double c = std::cos(pred.yaw);
-  double s = std::sin(pred.yaw);
-
-  Eigen::Matrix2d R_planar_initial;
-  R_planar_initial << c, -s, s, c;
-
-  Eigen::Vector2d t_planar_initial(pred.t.x(), pred.t.y());
-
   PlanarRegistrationResult planar_reg_res;
   {
+    double c = std::cos(pred.yaw);
+    double s = std::sin(pred.yaw);
+
+    Eigen::Matrix2d R_planar_initial;
+    R_planar_initial << c, -s, s, c;
+
+    Eigen::Vector2d t_planar_initial(pred.t.x(), pred.t.y());
     TimeMeasurments_t meas("planar_registration");
     planar_reg_res = planar_registration_.Align(
         objects_map_, cur_planar_points, R_planar_initial, t_planar_initial);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
+
+  if (!planar_reg_res.valid) {
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 1000,
+        "Planar registration invalid, skipping odometry update");
+    return;
+  }
   GroundRegistrationResult ground_reg_result;
   {
+    Eigen::Vector3d t_ground_initial;
+    t_ground_initial.x() = planar_reg_res.t.x();
+    t_ground_initial.y() = planar_reg_res.t.y();
+    t_ground_initial.z() = pred.t.z();
+
+    double yaw_planar =
+        std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
+
+    auto [roll_imu, pitch_imu, yaw_unused] =
+        EulersFromMatrixSimple(R_imu_prior_map);
+    (void)yaw_unused;
+
+    Eigen::Matrix3d R_ground_initial =
+        Eigen::AngleAxisd(yaw_planar, Eigen::Vector3d::UnitZ())
+            .toRotationMatrix() *
+        Eigen::AngleAxisd(pitch_imu, Eigen::Vector3d::UnitY())
+            .toRotationMatrix() *
+        Eigen::AngleAxisd(roll_imu, Eigen::Vector3d::UnitX())
+            .toRotationMatrix();
     TimeMeasurments_t meas("ground_registration");
-    ground_reg_result = ground_registration_.Align(
-        ground_map_, cur_patches, R_imu_prior_map, R_map_lidar_, pred.t);
+    ground_reg_result =
+        ground_registration_.Align(ground_map_, cur_patches, R_imu_prior_map,
+                                   R_ground_initial, t_ground_initial);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
@@ -543,6 +577,11 @@ void GALONode::ProcessCloud(
   } else {
     // Ground failed: trust planar x/y/yaw, keep previous z, take roll/pitch
     // from IMU prior.
+    RCLCPP_WARN(this->get_logger(),
+                "ground valid=%d matches=%d residual=%.3f dz=%.3f ok=%d",
+                ground_reg_result.valid, ground_reg_result.num_matches,
+                ground_reg_result.mean_abs_residual,
+                ground_reg_result.t.z() - t_map_lidar_.z(), is_ground_ok);
     double yaw = std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
 
     auto [roll_prior, pitch_prior, yaw_prior_unused] =
@@ -560,9 +599,11 @@ void GALONode::ProcessCloud(
             .toRotationMatrix();
 
     const double alpha_xy = 0.3;
+    const double alpha_z = ground_reg_result.valid ? 0.02 : 0.0;  // very slow
     t_abs.x() = pred.t.x() + alpha_xy * (planar_reg_res.t.x() - pred.t.x());
     t_abs.y() = pred.t.y() + alpha_xy * (planar_reg_res.t.y() - pred.t.y());
-    t_abs.z() = t_map_lidar_.z();
+    t_abs.z() = t_map_lidar_.z() +
+                alpha_z * (ground_reg_result.t.z() - t_map_lidar_.z());
   }
   R_map_lidar_ = R_abs;
   t_map_lidar_ = t_abs;
@@ -622,8 +663,11 @@ bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
   try {
     geometry_msgs::msg::TransformStamped tf_msg_il =
         tf_buffer.lookupTransform(imu_frame, lidar_frame, tf2::TimePointZero);
-    geometry_msgs::msg::TransformStamped tf_msg_map =
-        tf_buffer.lookupTransform(imu_frame, "map", tf2::TimePointZero);
+    geometry_msgs::msg::TransformStamped tf_msg_map_lidar =
+        tf_buffer.lookupTransform(map_frame, lidar_frame, tf2::TimePointZero);
+    geometry_msgs::msg::TransformStamped tf_msg_body_lidar =
+        tf_buffer.lookupTransform(lidar_frame, body_frame, tf2::TimePointZero);
+
     t_il = Eigen::Vector3d(tf_msg_il.transform.translation.x,
                            tf_msg_il.transform.translation.y,
                            tf_msg_il.transform.translation.z);
@@ -633,10 +677,17 @@ bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
         tf_msg_il.transform.rotation.y, tf_msg_il.transform.rotation.z);
     q_il.normalize();
 
-    q_i_map = Eigen::Quaterniond(
-        tf_msg_map.transform.rotation.w, tf_msg_map.transform.rotation.x,
-        tf_msg_map.transform.rotation.y, tf_msg_map.transform.rotation.z);
+    q_i_map = Eigen::Quaterniond(tf_msg_map_lidar.transform.rotation.w,
+                                 tf_msg_map_lidar.transform.rotation.x,
+                                 tf_msg_map_lidar.transform.rotation.y,
+                                 tf_msg_map_lidar.transform.rotation.z);
     q_i_map.normalize();
+
+    q_lidar_body_ = Eigen::Quaterniond(tf_msg_body_lidar.transform.rotation.w,
+                                       tf_msg_body_lidar.transform.rotation.x,
+                                       tf_msg_body_lidar.transform.rotation.y,
+                                       tf_msg_body_lidar.transform.rotation.z);
+    q_lidar_body_.normalize();
 
     geometry_msgs::msg::TransformStamped tf_pos_lidar =
         tf_buffer.lookupTransform(pos_antena_frame, lidar_frame,

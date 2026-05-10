@@ -99,8 +99,7 @@ SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
     double ground_z = gz_it->second;
     double dz = z - ground_z;
 
-    if (dz > params_.ground_min_height &&
-        dz < params_.ground_height_threshold) {
+    if (std::abs(dz) < params_.ground_height_threshold) {
       res.labels[idx] = PointLabels::GROUND;
     } else {
       res.labels[idx] = PointLabels::NON_GROUND;
@@ -218,10 +217,10 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
 
     const double inv_N = 1.0 / static_cast<double>(N);
 
-    Eigen::Vector3d centroid = patch_cell.sum * inv_N;
+    Eigen::Vector3d mean = patch_cell.sum * inv_N;
 
     Eigen::Matrix3d cov =
-        patch_cell.sum_outer * inv_N - centroid * centroid.transpose();
+        patch_cell.sum_outer * inv_N - mean * mean.transpose();
 
     cov = 0.5 * (cov + cov.transpose());  // numerical safety
 
@@ -233,6 +232,15 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
 
     Eigen::Vector3d normal = eigenvectors.col(0);
     if (normal.z() < 0.0) normal = -normal;
+
+    Eigen::Vector3d centroid = mean;
+
+    // Optional, but I would not use 20% here anymore after fixing segmentation.
+    // Use median or mean first.
+    std::vector<double> zs = patch_cell.zs;
+    std::sort(zs.begin(), zs.end());
+
+    centroid.z() = zs[zs.size() / 2];  // safer than z20
 
     double lambda0 = std::max(0.0, eigenvalues(0));
     double lambda1 = std::max(0.0, eigenvalues(1));
@@ -463,21 +471,6 @@ GroundRegistrationResult GroundRegistration::Align(
                 current.size(), map.size());
     return result;
   }
-
-  // ------------------------------------------------------------
-  // Build KD-tree for map patch centroids.
-  //
-  // `map` patches are already expressed in the global/map frame.
-  // The KD-tree is therefore queried in the map frame.
-  //
-  // Note:
-  //   z is intentionally set to 0.0 here.
-  //
-  // This makes matching mostly XY-based. That is usually better for ground
-  // patches because the optimizer itself estimates z, roll, and pitch using
-  // point-to-plane residuals. If z were included in nearest-neighbor search,
-  // a bad initial z could cause wrong correspondences.
-  // ------------------------------------------------------------
   pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud(
       new pcl::PointCloud<pcl::PointXYZ>());
 
@@ -545,11 +538,6 @@ GroundRegistrationResult GroundRegistration::Align(
     int num_matches = 0;
     double abs_residual_sum = 0.0;
 
-    // Track XY coverage of matched transformed current patches.
-    //
-    // Roll/pitch are poorly observable if matched ground patches occupy only a
-    // narrow strip. These spans are later used to optionally suppress unstable
-    // roll/pitch updates when IMU prior is disabled.
     double min_x = std::numeric_limits<double>::infinity();
     double max_x = -std::numeric_limits<double>::infinity();
     double min_y = std::numeric_limits<double>::infinity();
@@ -580,10 +568,6 @@ GroundRegistrationResult GroundRegistration::Align(
 
       const auto& mp = map[match_idx];
 
-      double vertical_error = std::abs(p.z() - mp.centroid.z());
-      if (vertical_error > params_.max_match_z_difference) {
-        continue;
-      }
       const Eigen::Vector3d& q = mp.centroid;
       const Eigen::Vector3d& n = mp.normal;
 
@@ -598,7 +582,9 @@ GroundRegistrationResult GroundRegistration::Align(
       // Positive/negative sign is okay as long as the Jacobian uses the same
       // convention, because the update solves dx = -H^-1 b.
       double r = n.dot(p - q);
-
+      if (r > params_.max_match_z_difference) {
+        continue;
+      }
       // Translation part of the Jacobian.
       //
       // This optimizer only updates z:
@@ -641,17 +627,17 @@ GroundRegistrationResult GroundRegistration::Align(
       // We keep only roll and pitch components. Yaw is intentionally not
       // optimized here because yaw comes from planar registration.
       Eigen::Matrix3d cur_skew = Skew(cur.centroid);
+      Eigen::Matrix3d dp_dtheta = -R * cur_skew;
+
       Eigen::RowVector3d J_rot = -n.transpose() * R * cur_skew;
 
       double J_roll = J_rot.x();
       double J_pitch = J_rot.y();
-
       // State order:
       //
       //   dx = [dz, droll, dpitch]
       Eigen::Vector3d J;
       J << J_dz, J_roll, J_pitch;
-
       // Patch weight.
       //
       // Start with support-based patch weight. If it is invalid, fall back
@@ -679,53 +665,6 @@ GroundRegistrationResult GroundRegistration::Align(
       H += weight * J * J.transpose();
       b += weight * J * r;
 
-      // debug
-      // Expected result: analytic and numeric should have the same sign and
-      // close magnitude. If roll/pitch are opposite sign, then this line is
-      // wrong:
-      // if (iter < 5) {
-      //   const double eps = 1e-4;
-
-      //   Eigen::Vector3d dtheta_roll(eps, 0.0, 0.0);
-      //   Eigen::Matrix3d R_eps = R * ExpSO3(dtheta_roll);
-
-      //   Eigen::Vector3d p_eps = R_eps * cur.centroid + t;
-      //   double r_eps = n.dot(p_eps - q);
-
-      //   double numeric = (r_eps - r) / eps;
-
-      //   RCLCPP_WARN(
-      //       logger_,
-      //       "ground J roll analytic %.9f numeric %.9f r %.9f r_eps %.9f",
-      //       J_roll, numeric, r, r_eps);
-
-      //   Eigen::Vector3d dtheta_pitch(0.0, eps, 0.0);
-      //   R_eps = R * ExpSO3(dtheta_pitch);
-
-      //   p_eps = R_eps * cur.centroid + t;
-      //   r_eps = n.dot(p_eps - q);
-
-      //   numeric = (r_eps - r) / eps;
-
-      //   RCLCPP_WARN(
-      //       logger_,
-      //       "ground J pitch analytic %.9f numeric %.9f r %.9f r_eps %.9f",
-      //       J_pitch, numeric, r, r_eps);
-
-      //   Eigen::Vector3d t_eps = t;
-      //   t_eps.z() += eps;
-
-      //   p_eps = R * cur.centroid + t_eps;
-      //   r_eps = n.dot(p_eps - q);
-
-      //   numeric = (r_eps - r) / eps;
-
-      //   RCLCPP_WARN(logger_,
-      //               "ground J dz analytic %.9f numeric %.9f r %.9f r_eps
-      //               %.9f", J_dz, numeric, r, r_eps);
-      // }
-      // debug
-
       ++num_matches;
       abs_residual_sum += std::abs(r);
     }
@@ -738,48 +677,11 @@ GroundRegistrationResult GroundRegistration::Align(
       return result;
     }
 
-    // ------------------------------------------------------------
-    // IMU SO(3) prior.
-    //
-    // R_imu_prior is the IMU-predicted absolute rotation:
-    //
-    //   map <- current_lidar
-    //
-    // The optimized R should stay close to this prior, especially in roll and
-    // pitch. This helps because ground-only geometry can be weak or degenerate.
-    //
-    // Rotation error:
-    //
-    //   R_err = R_imu_prior^T * R
-    //
-    // If R == R_imu_prior, then R_err is identity and LogSO3(R_err) is zero.
-    //
-    // rot_err is approximately:
-    //
-    //   [roll_error, pitch_error, yaw_error]
-    //
-    // for small errors.
-    //
-    // We constrain roll and pitch only. Yaw is ignored here because yaw is
-    // estimated by planar registration.
-    // ------------------------------------------------------------
-
     if (params_.use_imu_prior) {
       Eigen::Matrix3d R_err = R_imu_prior.transpose() * R;
       Eigen::Vector3d rot_err = LogSO3(R_err);
 
       {
-        // Residual:
-        //
-        //   r_roll = roll error between current R and IMU prior
-        //
-        // State:
-        //
-        //   dx = [dz, droll, dpitch]
-        //
-        // Jacobian:
-        //
-        //   dr_roll / droll = 1
         double r_roll = rot_err.x();
         Eigen::Vector3d J;
         J << 0.0, 1.0, 0.0;
@@ -789,13 +691,6 @@ GroundRegistrationResult GroundRegistration::Align(
       }
 
       {
-        // Residual:
-        //
-        //   r_pitch = pitch error between current R and IMU prior
-        //
-        // Jacobian:
-        //
-        //   dr_pitch / dpitch = 1
         double r_pitch = rot_err.y();
         Eigen::Vector3d J;
         J << 0.0, 0.0, 1.0;
@@ -804,18 +699,6 @@ GroundRegistrationResult GroundRegistration::Align(
         b += params_.imu_pitch_weight * J * r_pitch;
       }
     }
-
-    // Check conditioning of the ground registration system.
-    //
-    // Ground-only constraints can become degenerate, for example:
-    //   - almost flat ground everywhere,
-    //   - too small XY patch coverage,
-    //   - narrow strip of visible ground,
-    //   - bad or repetitive correspondences.
-    //
-    // If IMU prior is enabled, we usually let the prior stabilize roll/pitch.
-    // If IMU prior is disabled, degenerate roll/pitch updates are suppressed
-    // below.
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(H);
     Eigen::Vector3d evals = es.eigenvalues();
 

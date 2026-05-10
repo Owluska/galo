@@ -17,6 +17,11 @@ struct YawRateStamped {
   double rate;
 };
 
+struct SpeedStamped {
+  double time;
+  double speed;
+};
+
 struct PointCloudAzimuthPrms {
   double min_az = std::numeric_limits<double>::max();
   double max_az = std::numeric_limits<double>::lowest();
@@ -64,6 +69,7 @@ struct PointCloudAzimuthPrms {
 struct DeskewParams {
   int imu_queue_size = 100;
   int lidar_queue_size = 10;
+  int speed_queue_size = 10;
   double scan_period_ = 0.1;
   bool stamp_is_scan_end_ = true;
   int log_throttle = 2000;  // ms
@@ -74,6 +80,7 @@ class DeskewAlgorithm {
  private:
   FiniteDeque<YawRateStamped> imu_queue_;
   FiniteDeque<CloudMsg::SharedPtr> lidar_queue_;
+  FiniteDeque<SpeedStamped> speed_queue_;
   DeskewParams prms_;
   rclcpp::Logger logger_;
   rclcpp::Clock clock_;
@@ -82,6 +89,8 @@ class DeskewAlgorithm {
                             double scan_header_time) const;
 
   void UnwrapAzimuthParams(const CloudMsg& msg);
+
+  double InterpolateSpeed(double t) const;
 
  public:
   DeskewAlgorithm(const DeskewParams& params, const rclcpp::Logger& logger,
@@ -94,8 +103,16 @@ class DeskewAlgorithm {
     imu_queue_.Update(rate);
   }
 
+  void UpdateSpeedQueue(double speed, double time) {
+    SpeedStamped speed_stamped;
+    speed_stamped.speed = speed;
+    speed_stamped.time = time;
+    speed_queue_.Update(speed_stamped);
+  }
+
   void UpdateLidarQueue(const CloudMsg::SharedPtr msg) {
     lidar_queue_.Update(msg);
   }
-  std::optional<CloudMsg> ProcessCloudsQueue();
+  std::optional<CloudMsg> ProcessCloudsQueue(
+      const Eigen::Matrix3d& R_lidar_body);
 };

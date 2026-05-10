@@ -40,9 +40,10 @@ class PositionPredictor {
                                       const Eigen::Vector3d& t_current,
                                       double prev_time, double curr_time);
 
+  RearWheelSpeedResult EstimateRearAxleSpeed(
+      const WheelSpeedAngleData& speed_data);
+
  private:
   double prev_speed_ = 0;
   PredictionParams params_;
-  RearWheelSpeedResult EstimateRearAxleSpeed(
-      const WheelSpeedAngleData& speed_data);
 };

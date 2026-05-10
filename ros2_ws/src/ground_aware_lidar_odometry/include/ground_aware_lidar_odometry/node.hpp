@@ -97,7 +97,7 @@ struct GnssData {
 };
 
 struct GroundRegistrationGatePrms {
-  int min_matches = 35;
+  int min_matches = 20;
   double max_residual = 0.35;
   double max_droll = 5.0;   // deg
   double max_dpitch = 5.0;  // deg
@@ -112,6 +112,8 @@ class GALONode : public rclcpp::Node {
   std::string imu_frame = "imu";
   std::string lidar_frame = "rslidar";
   std::string pos_antena_frame = "pos_antenna";
+  std::string map_frame = "map";
+  std::string body_frame = "base_link";
   bool has_imu_lidar_extrinsic_ = false;
   bool has_imu_prev_ = false;
   bool has_lidar_imu_prev_ = false;
@@ -165,7 +167,8 @@ class GALONode : public rclcpp::Node {
   Eigen::Vector3d prev_t_map_lidar_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d velocity_map_lidar_ = Eigen::Vector3d::Zero();
 
-  Eigen::Quaterniond imu_q_prev_, q_il, q_i_map, imu_q_lidar_prev_, q_pos_lidar;
+  Eigen::Quaterniond imu_q_prev_, q_il, q_i_map, imu_q_lidar_prev_, q_pos_lidar,
+      q_lidar_body_;
   Eigen::Matrix3d R_imu_delta;
   Eigen::Matrix3d latest_R_map_base_ = Eigen::Matrix3d::Identity();
   Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
@@ -236,4 +239,5 @@ class GALONode : public rclcpp::Node {
   static PlanarRegistrationParams LoadPlanarRegistrationParams(
       rclcpp::Node& node);
   static GnssLocalizationParams LoadGnssParams(rclcpp::Node& node);
+  static GroundRegistrationGatePrms LoadGroundGateParams(rclcpp::Node& node);
 };

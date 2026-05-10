@@ -112,11 +112,12 @@ struct PatchCell {
   int count = 0;
   Eigen::Vector3d sum = Eigen::Vector3d::Zero();
   Eigen::Matrix3d sum_outer = Eigen::Matrix3d::Zero();
-
+  std::vector<double> zs;
   void AddPoint(const Eigen::Vector3d& p) {
     ++count;
     sum += p;
     sum_outer += p * p.transpose();
+    zs.push_back(p.z());
   }
 };
 

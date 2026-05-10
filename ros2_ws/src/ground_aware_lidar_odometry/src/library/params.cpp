@@ -189,3 +189,23 @@ GnssLocalizationParams GALONode::LoadGnssParams(rclcpp::Node& node) {
   p.zone = DeclareAndGet<int>(node, "gnss_location.zone", p.zone);
   return p;
 }
+
+GroundRegistrationGatePrms GALONode::LoadGroundGateParams(rclcpp::Node& node) {
+  GroundRegistrationGatePrms p;
+
+  p.max_dpitch = DeclareAndGet<double>(
+      node, "ground_registration_gate_params.max_dpitch", p.max_dpitch);
+
+  p.max_droll = DeclareAndGet<double>(
+      node, "ground_registration_gate_params.max_droll", p.max_droll);
+
+  p.max_dz = DeclareAndGet<double>(
+      node, "ground_registration_gate_params.max_dz", p.max_dz);
+
+  p.max_residual = DeclareAndGet<double>(
+      node, "ground_registration_gate_params.max_residual", p.max_residual);
+
+  p.min_matches = DeclareAndGet<int>(
+      node, "ground_registration_gate_params.min_matches", p.min_matches);
+  return p;
+}

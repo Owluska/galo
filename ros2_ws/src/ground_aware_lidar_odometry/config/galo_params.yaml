@@ -6,7 +6,7 @@ galo:
       utm_zone: 43
       northp: true
     node:
-      debug: 0
+      debug: 1
       max_ground_map_frames: 5
       max_planar_map_frames: 3
 
@@ -70,7 +70,12 @@ galo:
       use_imu_prior: true
       log_throttle: 2000
       max_match_z_difference: 1.0
-
+    ground_registration_gate_params:
+      min_matches : 20
+      max_residual : 0.35
+      max_droll : 5.0   # deg
+      max_dpitch : 5.0  # deg
+      max_dz : 1.0      # m
     planar_registration:
       voxel_size: 2.0
       max_match_distance: 2.0
