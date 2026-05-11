@@ -74,6 +74,11 @@ struct GALONodeParams {
   int debug = 1;
   int max_ground_map_frames = 10;
   int max_planar_map_frames = 10;
+  double merge_alpha_xy = 0.3;
+  double merge_alpha_z = 0.3;
+  double merge_alpha_rp = 0.2;
+  double fallback_alpha_xy = 0.3;
+  double fallback_alpha_z_valid_ground = 0.02;
   GnssCovariance gt_cov_;
   LidarCovariance est_cov_;
 };
@@ -112,13 +117,14 @@ class GALONode : public rclcpp::Node {
   std::string imu_frame = "imu";
   std::string lidar_frame = "rslidar";
   std::string pos_antena_frame = "pos_antenna";
+  std::string orientation_antenna_frame = "orientation_antenna";
   std::string map_frame = "map";
   std::string body_frame = "base_link";
   bool has_imu_lidar_extrinsic_ = false;
   bool has_imu_prev_ = false;
   bool has_lidar_imu_prev_ = false;
   bool has_lidar_odom_initialized_from_gnss_ = false;
-  bool has_latest_R_map_base_ = false;
+  bool has_latest_R_base_ = false;
   bool has_prev_lidar_pose_for_prediction_ = false;
   double prev_lidar_pose_time_ = 0.0;
   double last_wa_ = 0;
@@ -162,15 +168,15 @@ class GALONode : public rclcpp::Node {
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  Eigen::Vector3d t_map_lidar_ = Eigen::Vector3d::Zero();
-  Eigen::Vector3d t_il, t_pos_lidar;
+  Eigen::Vector3d t_map_lidar = Eigen::Vector3d::Zero();
+  Eigen::Vector3d t_lidar_body, t_body_imu, t_body_pos, t_body_orientation;
   Eigen::Vector3d prev_t_map_lidar_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d velocity_map_lidar_ = Eigen::Vector3d::Zero();
 
-  Eigen::Quaterniond imu_q_prev_, q_il, q_i_map, imu_q_lidar_prev_, q_pos_lidar,
-      q_lidar_body_;
+  Eigen::Quaterniond imu_q_prev_, q_imu_lidar, q_map_lidar, imu_q_lidar_prev_,
+      q_lidar_body, q_body_imu;
   Eigen::Matrix3d R_imu_delta;
-  Eigen::Matrix3d latest_R_map_base_ = Eigen::Matrix3d::Identity();
+  Eigen::Matrix3d latest_R_base_ = Eigen::Matrix3d::Identity();
   Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
 
   FiniteDeque<ImuOrientationStamped> imu_orientation_queue_;
@@ -219,13 +225,12 @@ class GALONode : public rclcpp::Node {
       const Eigen::Vector<double, 6>& sigmas);
   Eigen::Vector3d MergeGroundAndPlanarTranslation(
       const Eigen::Vector3d& t_ground, const Eigen::Vector3d& t_prior,
-      const Eigen::Vector2d& t_planar, double alpha_xy = 0.3,
-      double alpha_z = 0.3);
+      const Eigen::Vector2d& t_planar, double alpha_xy, double alpha_z);
 
   Eigen::Matrix3d MergeGroundAndPlanarRotation(const Eigen::Matrix3d& R_ground,
                                                const Eigen::Matrix3d& R_prior,
                                                const Eigen::Matrix2d& R_planar,
-                                               double alpha_rp = 0.2);
+                                               double alpha_rp);
   bool TryInitializeOdomFromGnss();
   bool CheckGroundRegistration(const GroundRegistrationResult& res);
 
@@ -238,6 +243,20 @@ class GALONode : public rclcpp::Node {
       rclcpp::Node& node);
   static PlanarRegistrationParams LoadPlanarRegistrationParams(
       rclcpp::Node& node);
+  static PredictionParams LoadPredictionParams(rclcpp::Node& node);
   static GnssLocalizationParams LoadGnssParams(rclcpp::Node& node);
   static GroundRegistrationGatePrms LoadGroundGateParams(rclcpp::Node& node);
+
+  bool GetTransformation(tf2_ros::Buffer& tf_buffer,
+                         const std::string& target_frame,
+                         const std::string& source_frame, Eigen::Quaterniond& q,
+                         Eigen::Vector3d& t);
+
+  bool GetOrientation(tf2_ros::Buffer& tf_buffer,
+                      const std::string& target_frame,
+                      const std::string& source_frame, Eigen::Quaterniond& q);
+
+  bool GetTranslation(tf2_ros::Buffer& tf_buffer,
+                      const std::string& target_frame,
+                      const std::string& source_frame, Eigen::Vector3d& t);
 };

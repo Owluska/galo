@@ -746,6 +746,7 @@ GroundRegistrationResult GroundRegistration::Align(
     //   pitch changes height as a function of x.
     //   If x coverage is small, pitch is weakly observable.
     if (x_span < params_.min_x_span_for_pitch && !params_.use_imu_prior) {
+      RCLCPP_WARN(logger_, "Pitch is weakly observable");
       dx(2) = 0.0;
     }
 
@@ -755,6 +756,7 @@ GroundRegistrationResult GroundRegistration::Align(
     //   roll changes height as a function of y.
     //   If y coverage is small, roll is weakly observable.
     if (y_span < params_.min_y_span_for_roll && !params_.use_imu_prior) {
+      RCLCPP_WARN(logger_, "Roll is weakly observable");
       dx(1) = 0.0;
     }
 

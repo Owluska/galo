@@ -30,6 +30,7 @@ struct PredictionParams {
   double max_diff_residual = 0.5;  // m/s
   double max_jump = 2.0;           // m/s
   double min_speed_for_turn_check = 0.2;
+  double tau = 1.0;
 };
 
 class PositionPredictor {
@@ -45,5 +46,6 @@ class PositionPredictor {
 
  private:
   double prev_speed_ = 0;
+  bool has_prev_speed_ = false;
   PredictionParams params_;
 };

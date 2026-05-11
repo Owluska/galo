@@ -8,6 +8,17 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
       node, "node.max_ground_map_frames", p.max_ground_map_frames);
   p.max_planar_map_frames = DeclareAndGet<int>(
       node, "node.max_planar_map_frames", p.max_planar_map_frames);
+  p.merge_alpha_xy =
+      DeclareAndGet<double>(node, "pose_merge.alpha_xy", p.merge_alpha_xy);
+  p.merge_alpha_z =
+      DeclareAndGet<double>(node, "pose_merge.alpha_z", p.merge_alpha_z);
+  p.merge_alpha_rp =
+      DeclareAndGet<double>(node, "pose_merge.alpha_rp", p.merge_alpha_rp);
+  p.fallback_alpha_xy = DeclareAndGet<double>(
+      node, "pose_merge.fallback_alpha_xy", p.fallback_alpha_xy);
+  p.fallback_alpha_z_valid_ground = DeclareAndGet<double>(
+      node, "pose_merge.fallback_alpha_z_valid_ground",
+      p.fallback_alpha_z_valid_ground);
 
   p.gt_cov_.x_precision = DeclareAndGet<double>(
       node, "gnss_covariance.x_precision", p.gt_cov_.x_precision);
@@ -69,8 +80,6 @@ GroundSegmentationParams GALONode::LoadGroundSegmentationParams(
                             p.ground_height_threshold);
   p.min_points_per_cell = DeclareAndGet<int>(
       node, "ground_segmentation.min_points_per_cell", p.min_points_per_cell);
-  p.ground_min_height = DeclareAndGet<double>(
-      node, "ground_segmentation.ground_min_height", p.ground_min_height);
   return p;
 }
 
@@ -178,6 +187,25 @@ PlanarRegistrationParams GALONode::LoadPlanarRegistrationParams(
   return p;
 }
 
+PredictionParams GALONode::LoadPredictionParams(rclcpp::Node& node) {
+  PredictionParams p;
+
+  p.rear_track_ =
+      DeclareAndGet<double>(node, "prediction.rear_track", p.rear_track_);
+  p.wheelbase_ =
+      DeclareAndGet<double>(node, "prediction.wheelbase", p.wheelbase_);
+  p.max_diff_residual = DeclareAndGet<double>(
+      node, "prediction.max_diff_residual", p.max_diff_residual);
+  p.max_jump =
+      DeclareAndGet<double>(node, "prediction.max_jump", p.max_jump);
+  p.min_speed_for_turn_check =
+      DeclareAndGet<double>(node, "prediction.min_speed_for_turn_check",
+                            p.min_speed_for_turn_check);
+  p.tau = DeclareAndGet<double>(node, "prediction.tau", p.tau);
+
+  return p;
+}
+
 GnssLocalizationParams GALONode::LoadGnssParams(rclcpp::Node& node) {
   GnssLocalizationParams p;
 
@@ -186,7 +214,7 @@ GnssLocalizationParams GALONode::LoadGnssParams(rclcpp::Node& node) {
   p.base_lon =
       DeclareAndGet<double>(node, "gnss_location.base_lon", p.base_lon);
   p.northp = DeclareAndGet<bool>(node, "gnss_location.northp", p.northp);
-  p.zone = DeclareAndGet<int>(node, "gnss_location.zone", p.zone);
+  p.zone = DeclareAndGet<int>(node, "gnss_location.utm_zone", p.zone);
   return p;
 }
 

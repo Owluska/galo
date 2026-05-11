@@ -28,7 +28,11 @@ PredictedPose PositionPredictor::PredictFromWheelModel(
     return out;
   }
 
-  const double speed = res.speed;
+  double speed = res.speed;
+  if (has_prev_speed_) {
+    const double alpha = std::clamp(params_.tau, 0.0, 1.0);
+    speed = prev_speed_ + alpha * (speed - prev_speed_);
+  }
 
   // Make sure wheel_angle is radians.
   const double steer = speed_data.wheel_angle;
@@ -43,6 +47,7 @@ PredictedPose PositionPredictor::PredictFromWheelModel(
   out.yaw = NormalizeAngle(out.yaw + dyaw);
 
   prev_speed_ = speed;
+  has_prev_speed_ = true;
   return out;
 }
 

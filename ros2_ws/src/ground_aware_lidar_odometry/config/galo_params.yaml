@@ -10,9 +10,18 @@ galo:
       max_ground_map_frames: 5
       max_planar_map_frames: 3
 
+    pose_merge:
+      alpha_xy: 0.3
+      alpha_z: 0.8
+      alpha_rp: 0.8
+      fallback_alpha_xy: 0.3
+      fallback_alpha_z_valid_ground: 0.1
+
     frames:
       imu_frame: "imu"
       lidar_frame: "rslidar"
+      pos_antenna_frame: "pos_antenna"
+      orientation_antenna_frame: "orientation_antenna"
 
     gnss_covariance:
       x_precision: 0.03
@@ -38,44 +47,45 @@ galo:
       debug: 0
 
     ground_segmentation:
-      cell_size: 1.5
+      cell_size: 2.0
       min_range: 5.0
-      max_range: 50.0
-      ground_height_threshold: 0.18
-      min_points_per_cell: 4
-      ground_min_height: -0.15 # from local ground Z
+      max_range: 70.0
+      ground_height_threshold: 0.2
+      min_points_per_cell: 10
 
     ground_patch:
-      cell_size: 10.0
-      min_points: 20
-      max_thickness: 0.40
-      min_normal_z: 0.70
-      max_surface_variation: 0.08
+      cell_size: 6.0
+      min_points: 15
+      max_thickness: 0.35
+      min_normal_z: 0.85
+      max_surface_variation: 0.05
 
     ground_registration:
       max_match_distance: 10.0
-      min_normal_dot: 0.65
+      min_normal_dot: 0.75
       max_iterations: 10
       min_matches: 4
-      max_dz: 0.15
-      max_roll: 0.02
-      max_pitch: 0.02
+      max_dz: 0.25
+      max_roll: 0.05
+      max_pitch: 0.05
       damping_z: 0.001
       damping_roll: 0.01
       damping_pitch: 0.01
       min_x_span_for_pitch: 8.0
       min_y_span_for_roll: 6.0
-      imu_roll_weight: 100.0
-      imu_pitch_weight: 100.0
-      use_imu_prior: true
+      imu_roll_weight: 10.0
+      imu_pitch_weight: 10.0
+      use_imu_prior: false
       log_throttle: 2000
       max_match_z_difference: 1.0
+
     ground_registration_gate_params:
-      min_matches : 20
+      min_matches : 15
       max_residual : 0.35
       max_droll : 5.0   # deg
       max_dpitch : 5.0  # deg
       max_dz : 1.0      # m
+
     planar_registration:
       voxel_size: 2.0
       max_match_distance: 2.0
@@ -90,3 +100,11 @@ galo:
       max_dy_step: 2.0
       max_dyaw_step: 0.2
       convergence_eps: 0.00001
+
+    prediction:
+      rear_track: 5.16
+      wheelbase: 5.3
+      max_diff_residual: 0.5
+      max_jump: 2.0
+      min_speed_for_turn_check: 0.2
+      tau: 1.0

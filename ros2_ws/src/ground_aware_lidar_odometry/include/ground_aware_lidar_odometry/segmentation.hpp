@@ -34,7 +34,6 @@ struct GroundSegmentationParams {
   double min_range = 2.0;
   double max_range = 80.0;
   double ground_height_threshold = 0.20;
-  double ground_min_height = -0.15;
   int min_points_per_cell = 5;
 };
 struct GroundPatchParams {
