@@ -35,6 +35,8 @@ struct GroundSegmentationParams {
   double max_range = 80.0;
   double ground_height_threshold = 0.20;
   int min_points_per_cell = 5;
+  int neighbor_radius = 1;
+  int min_neighbor_cells = 6;
   double ground_z_quantile = 0.20;
   int grid_reserve = 50000;
   int smoothed_grid_reserve = 50000;

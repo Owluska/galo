@@ -40,6 +40,9 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
       DeclareAndGet<double>(node, "node.pose_dt_min", p.pose_dt_min);
   p.pose_dt_max =
       DeclareAndGet<double>(node, "node.pose_dt_max", p.pose_dt_max);
+  p.gnss_correction_period_sec =
+      DeclareAndGet<double>(node, "node.gnss_correction_period_sec",
+                            p.gnss_correction_period_sec);
 
   p.imu_frame =
       DeclareAndGet<std::string>(node, "frames.imu_frame", p.imu_frame);
@@ -175,6 +178,10 @@ GroundSegmentationParams GALONode::LoadGroundSegmentationParams(
                             p.ground_height_threshold);
   p.min_points_per_cell = DeclareAndGet<int>(
       node, "ground_segmentation.min_points_per_cell", p.min_points_per_cell);
+  p.neighbor_radius = DeclareAndGet<int>(
+      node, "ground_segmentation.neighbor_radius", p.neighbor_radius);
+  p.min_neighbor_cells = DeclareAndGet<int>(
+      node, "ground_segmentation.min_neighbor_cells", p.min_neighbor_cells);
   p.ground_z_quantile = DeclareAndGet<double>(
       node, "ground_segmentation.ground_z_quantile", p.ground_z_quantile);
   p.grid_reserve = DeclareAndGet<int>(node, "ground_segmentation.grid_reserve",

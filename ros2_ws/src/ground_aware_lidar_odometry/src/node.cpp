@@ -90,7 +90,6 @@ GALONode::GALONode()
       node_params_.est_eulers_topic, 1);
   pure_state_eulers_pub_ = this->create_publisher<geometry_msgs::msg::Point>(
       node_params_.pure_state_eulers_topic, 1);
-
   gnss_imu_pose_pub_ =
       this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
           node_params_.true_pose_topic, 1);
@@ -99,6 +98,19 @@ GALONode::GALONode()
           node_params_.estimate_pose_topic, 1);
   speed_pub_ = this->create_publisher<std_msgs::msg::Float32>(
       node_params_.speed_topic, 1);
+
+  if (node_params_.gnss_correction_period_sec > 0.0) {
+    auto correction_period =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::duration<double>(
+                node_params_.gnss_correction_period_sec));
+    gnss_correction_timer_ = this->create_wall_timer(
+        correction_period, std::bind(&GALONode::GnssCorrectionTimerCb, this),
+        lidar_callback_group_);
+    RCLCPP_INFO(this->get_logger(),
+                "GNSS LiDAR odometry correction timer period: %.3f s",
+                node_params_.gnss_correction_period_sec);
+  }
 }
 
 void GALONode::WheelAngleCb(
@@ -134,6 +146,16 @@ void GALONode::PureStateCb(const common_msgs::msg::PureState::SharedPtr msg) {
   eulers_msg.y = pitch;
   eulers_msg.z = yaw;
   pure_state_eulers_pub_->publish(eulers_msg);
+}
+
+void GALONode::GnssCorrectionTimerCb() {
+  while (rclcpp::ok() && !TryInitializeOdomFromGnss(true)) {
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(),
+        node_params_.initialization_log_throttle,
+        "Waiting for GNSS position/yaw to correct LiDAR odometry");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
 }
 
 void GALONode::GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg) {
@@ -282,6 +304,7 @@ void GALONode::GnssYawCb(
 
     gnss_data_.yaw = gnss_yaw;
     gnss_data_.has_gnss_yaw = true;
+    gnss_data_.yaw_time = yaw_time;
     latest_R_base_ = R_gt;
     has_latest_R_base_ = true;
   }
@@ -736,8 +759,10 @@ bool GALONode::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
   return res;
 }
 
-bool GALONode::TryInitializeOdomFromGnss() {
-  if (has_lidar_odom_initialized_from_gnss_) {
+bool GALONode::TryInitializeOdomFromGnss(bool force_correction) {
+  constexpr double kMaxGnssDataAgeSec = 0.2;
+
+  if (has_lidar_odom_initialized_from_gnss_ && !force_correction) {
     return true;
   }
 
@@ -756,6 +781,20 @@ bool GALONode::TryInitializeOdomFromGnss() {
       return false;
     }
 
+    const double now = this->get_clock()->now().seconds();
+    const double position_age = now - gnss_data_.nmea_time;
+    const double yaw_age = now - gnss_data_.yaw_time;
+    if (position_age < 0.0 || position_age > kMaxGnssDataAgeSec ||
+        yaw_age < 0.0 || yaw_age > kMaxGnssDataAgeSec) {
+      RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this->get_clock(),
+          node_params_.initialization_log_throttle,
+          "GNSS data is stale for LiDAR odometry correction: "
+          "position_age=%.3f s yaw_age=%.3f s",
+          position_age, yaw_age);
+      return false;
+    }
+
     gnss_local = gnss_data_.gnss_local_;
     R_base = latest_R_base_;
   }
@@ -771,20 +810,24 @@ bool GALONode::TryInitializeOdomFromGnss() {
   t_map_lidar = t_map_base + R_base * t_body_lidar;
 
   has_lidar_odom_initialized_from_gnss_ = true;
+  prev_t_map_lidar_ = t_map_lidar;
+  velocity_map_lidar_ = Eigen::Vector3d::Zero();
+  has_prev_lidar_pose_for_prediction_ = false;
 
   auto [base_roll, base_pitch, base_yaw] = EulersFromMatrixSimple(R_base);
   auto [lidar_roll, lidar_pitch, lidar_yaw] =
       EulersFromMatrixSimple(R_map_lidar_);
 
   RCLCPP_INFO(this->get_logger(),
-              "Initialized LiDAR odometry from GNSS+IMU: "
+              "%s LiDAR odometry from GNSS+IMU: "
               "t=[%.3f %.3f %.3f], "
               "base_rpy=[%.3f %.3f %.3f] deg, "
               "lidar_rpy=[%.3f %.3f %.3f] deg",
-              t_map_lidar.x(), t_map_lidar.y(), t_map_lidar.z(),
-              base_roll * 180.0 / M_PI, base_pitch * 180.0 / M_PI,
-              base_yaw * 180.0 / M_PI, lidar_roll * 180.0 / M_PI,
-              lidar_pitch * 180.0 / M_PI, lidar_yaw * 180.0 / M_PI);
+              force_correction ? "Corrected" : "Initialized", t_map_lidar.x(),
+              t_map_lidar.y(), t_map_lidar.z(), base_roll * 180.0 / M_PI,
+              base_pitch * 180.0 / M_PI, base_yaw * 180.0 / M_PI,
+              lidar_roll * 180.0 / M_PI, lidar_pitch * 180.0 / M_PI,
+              lidar_yaw * 180.0 / M_PI);
 
   return true;
 }

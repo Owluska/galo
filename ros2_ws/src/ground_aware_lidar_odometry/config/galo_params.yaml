@@ -8,7 +8,7 @@ galo:
     
     node:
       debug: 1
-      max_ground_map_frames: 5
+      max_ground_map_frames: 6
       max_planar_map_frames: 3
       imu_orientation_queue_size: 2000
       min_gnss_quality: 4
@@ -19,14 +19,15 @@ galo:
       pose_dt_min: 0.001
       pose_dt_max: 0.5
       elapsed_time_thresh: 50
+      gnss_correction_period_sec: 120.0 #120.0
 
     pose_merge:
       alpha_xy: 0.3
-      alpha_z: 0.8
-      alpha_rp: 0.8
-      alpha_yaw: 0.8
+      alpha_z: 0.95
+      alpha_rp: 0.95
+      alpha_yaw: 0.95
       fallback_alpha_xy: 0.3
-      fallback_alpha_z_valid_ground: 0.8
+      fallback_alpha_z_valid_ground: 0.95
 
     frames:
       imu_frame: "imu"
@@ -95,17 +96,19 @@ galo:
       min_range: 5.0
       max_range: 70.0
       ground_height_threshold: 0.2
-      min_points_per_cell: 10
+      min_points_per_cell: 30
+      neighbor_radius: 2
+      min_neighbor_cells: 10
       ground_z_quantile: 0.30
       grid_reserve: 50000
       smoothed_grid_reserve: 50000
 
     ground_patch:
-      cell_size: 6.0
-      min_points: 15
+      cell_size: 5.0
+      min_points: 20
       max_thickness: 0.35
       min_normal_z: 0.85
-      max_surface_variation: 0.05
+      max_surface_variation: 0.03
       patch_reserve: 20000
       valid_patch_reserve: 5000
       marker_normal_scale: 0.7
@@ -118,11 +121,11 @@ galo:
       cell_marker_alpha: 0.25
 
     ground_registration:
-      max_match_distance: 10.0
+      max_match_distance: 8.0
       min_normal_dot: 0.75
       max_iterations: 10
       min_matches: 4
-      max_dz: 0.25
+      max_dz: 0.5
       max_roll: 0.05
       max_pitch: 0.05
       damping_z: 0.001

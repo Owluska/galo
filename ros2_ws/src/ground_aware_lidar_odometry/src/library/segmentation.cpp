@@ -44,9 +44,12 @@ void Segmentation::FillSmoothedGrid() {
 
 double Segmentation::GetNeighborGroundZ(const CellKey& key) const {
   std::vector<double> zs;
+  const int radius = std::max(1, params_.neighbor_radius);
+  const auto min_neighbor_cells =
+      static_cast<size_t>(std::max(0, params_.min_neighbor_cells));
 
-  for (int dx = -1; dx <= 1; ++dx) {
-    for (int dy = -1; dy <= 1; ++dy) {
+  for (int dx = -radius; dx <= radius; ++dx) {
+    for (int dy = -radius; dy <= radius; ++dy) {
       CellKey nk{key.x + dx, key.y + dy};
 
       auto it = grid_.find(nk);
@@ -59,7 +62,7 @@ double Segmentation::GetNeighborGroundZ(const CellKey& key) const {
     }
   }
 
-  if (zs.empty()) {
+  if (zs.size() < min_neighbor_cells) {
     return std::numeric_limits<double>::quiet_NaN();
   }
 
@@ -93,10 +96,14 @@ SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
     CellKey key{ix, iy};
     auto gz_it = smoothed_ground_z_.find(key);
     if (gz_it == smoothed_ground_z_.end()) {
-      res.labels[idx] = PointLabels::NON_GROUND;
+      res.labels[idx] = PointLabels::UNKNOWN;
       continue;
     }
     double ground_z = gz_it->second;
+    if (std::isnan(ground_z)) {
+      res.labels[idx] = PointLabels::UNKNOWN;
+      continue;
+    }
     double dz = z - ground_z;
 
     if (std::abs(dz) < params_.ground_height_threshold) {

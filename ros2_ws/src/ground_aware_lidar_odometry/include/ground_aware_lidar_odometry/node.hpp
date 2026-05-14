@@ -4,6 +4,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2_sensor_msgs/tf2_sensor_msgs.h>
 
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -100,6 +101,7 @@ struct GALONodeParams {
   double pose_dt_min = 1e-3;
   double pose_dt_max = 0.5;
   double elapsed_time_thresh = 50.0;  // ms
+  double gnss_correction_period_sec = 120.0;
   std::string imu_frame = "imu";
   std::string lidar_frame = "rslidar";
   std::string pos_antenna_frame = "pos_antenna";
@@ -144,6 +146,7 @@ struct GnssData {
   bool has_gnss_position_ = false;
   bool has_gnss_yaw = false;
   double nmea_time = 0;
+  double yaw_time = 0;
 };
 
 struct GroundRegistrationGatePrms {
@@ -197,6 +200,7 @@ class GALONode : public rclcpp::Node {
   rclcpp::Subscription<common_msgs::msg::PureState>::SharedPtr pure_state_sub_;
   rclcpp::CallbackGroup::SharedPtr lidar_callback_group_;
   rclcpp::CallbackGroup::SharedPtr other_callback_group_;
+  rclcpp::TimerBase::SharedPtr gnss_correction_timer_;
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskew_cld_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr colored_pub_;
@@ -251,6 +255,7 @@ class GALONode : public rclcpp::Node {
   void PureStateCb(const common_msgs::msg::PureState::SharedPtr msg);
   void WheelSpeedCb(const common_msgs::msg::WheelSpeed::SharedPtr msg);
   void WheelAngleCb(const qarl_msgs::msg::WAngleFeedback::SharedPtr msg);
+  void GnssCorrectionTimerCb();
 
   void PrintTimeMeasurments(const std::vector<TimeMeasurments_t>& measurments);
 
@@ -279,7 +284,7 @@ class GALONode : public rclcpp::Node {
                                                const Eigen::Matrix3d& R_prior,
                                                const Eigen::Matrix2d& R_planar,
                                                double alpha_rp, double alpha_y);
-  bool TryInitializeOdomFromGnss();
+  bool TryInitializeOdomFromGnss(bool force_correction = false);
   bool CheckGroundRegistration(const GroundRegistrationResult& res);
 
   static GALONodeParams LoadNodeParams(rclcpp::Node& node);
