@@ -70,7 +70,7 @@ double DeskewAlgorithm::InterpolateSpeed(double t) const {
   const auto& s1 = speed_queue_[i + 1];
 
   const double dt = s1.time - s0.time;
-  if (dt <= 1e-6) return s0.speed;
+  if (dt <= prms_.min_time_epsilon) return s0.speed;
 
   double a = (t - s0.time) / dt;
   a = std::clamp(a, 0.0, 1.0);
@@ -87,7 +87,7 @@ DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
   sensor_msgs::msg::PointCloud2 out = *lidar_queue_.PeerFront();
   UnwrapAzimuthParams(out);
   // double az_span = azs_.max_az - azs_.min_az;
-  if (azs_.GetRange() <= 1e-6) {
+  if (azs_.GetRange() <= prms_.azimuth_range_epsilon) {
     RCLCPP_WARN(logger_, "Invalid azimuth span, skipping deskew");
     return {};
   }
@@ -132,7 +132,8 @@ DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
       continue;
     }
 
-    if (relative_time < -1e-3 || relative_time > 1.0 + 1e-3) {
+    if (relative_time < -prms_.relative_time_tolerance ||
+        relative_time > 1.0 + prms_.relative_time_tolerance) {
       continue;
     }
     double point_time = PointTimeFromIndex(relative_time, scan_time);
@@ -140,7 +141,7 @@ DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
     const double signed_dt = point_time - scan_time;
     const double abs_dt = std::abs(signed_dt);
 
-    if (abs_dt > prms_.scan_period_ + 1e-6) {
+    if (abs_dt > prms_.scan_period_ + prms_.min_time_epsilon) {
       RCLCPP_WARN_THROTTLE(logger_, clock_, prms_.log_throttle,
                            "Bad deskew_dt %.6f rel=%.3f az=%.3f range=%.3f",
                            signed_dt, relative_time, azs_.unwrapped_az[idx],
@@ -163,7 +164,7 @@ DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
     const auto& imu1 = imu_queue_[imu_idx + 1];
 
     double imu_dt = imu1.time - imu0.time;
-    if (imu_dt <= 1e-6) {
+    if (imu_dt <= prms_.min_time_epsilon) {
       RCLCPP_WARN(logger_, "Too little imu_dt: %.6f", imu_dt);
       continue;
     }

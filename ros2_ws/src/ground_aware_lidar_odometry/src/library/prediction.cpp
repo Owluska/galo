@@ -14,17 +14,18 @@ PredictedPose PositionPredictor::PredictFromWheelModel(
 
   const double dt = curr_time - prev_time;
 
-  if (dt <= 1e-3 || dt > 0.5) {
+  if (dt <= params_.min_prediction_dt || dt > params_.max_prediction_dt) {
     return out;
   }
 
-  if (std::abs(curr_time - speed_data.wheel_time) > 0.3) {
+  if (std::abs(curr_time - speed_data.wheel_time) >
+      params_.max_wheel_data_age) {
     return out;
   }
 
   RearWheelSpeedResult res = EstimateRearAxleSpeed(speed_data);
   out.speed = res.speed;
-  if (!res.valid || std::abs(res.speed) < 0.05) {
+  if (!res.valid || std::abs(res.speed) < params_.min_valid_speed) {
     return out;
   }
 
@@ -70,7 +71,7 @@ RearWheelSpeedResult PositionPredictor::EstimateRearAxleSpeed(
                    std::tan(speed_data.wheel_angle);
 
   // Avoid singular/crazy correction at extreme steering or bad calibration.
-  if (std::abs(k) > 0.5) {
+  if (std::abs(k) > params_.max_steering_correction) {
     return out;
   }
 

@@ -35,6 +35,9 @@ struct GroundSegmentationParams {
   double max_range = 80.0;
   double ground_height_threshold = 0.20;
   int min_points_per_cell = 5;
+  double ground_z_quantile = 0.20;
+  int grid_reserve = 50000;
+  int smoothed_grid_reserve = 50000;
 };
 struct GroundPatchParams {
   double cell_size = 5.0;
@@ -42,6 +45,16 @@ struct GroundPatchParams {
   double max_thickness = 0.2;
   double min_normal_z = 0.90;  // ~30° slope
   double max_surface_variation = 0.03;
+  int patch_reserve = 20000;
+  int valid_patch_reserve = 5000;
+  double marker_normal_scale = 0.7;
+  double marker_shaft_diameter = 0.08;
+  double marker_head_diameter = 0.10;
+  double marker_head_length = 0.12;
+  double marker_lifetime = 0.2;
+  double cell_marker_z_offset = 0.02;
+  double cell_marker_height = 0.03;
+  double cell_marker_alpha = 0.25;
 };
 struct GroundRegistrationParams {
   double max_match_distance = 2.0;
@@ -61,6 +74,12 @@ struct GroundRegistrationParams {
   bool use_imu_prior = true;
   int log_throttle = 2000;  // ms
   double max_match_z_difference = 0.8;
+  int k_nearest_neighbors = 8;
+  double range_weight_coeff = 0.005;
+  double condition_lambda_floor = 1e-9;
+  double min_condition_eigenvalue = 1e-4;
+  double max_condition_number = 1e6;
+  double convergence_eps = 1e-5;
 };
 
 struct PlanarRegistrationParams {
@@ -80,6 +99,7 @@ struct PlanarRegistrationParams {
   double max_dyaw_step = 0.1;
 
   double convergence_eps = 1e-5;
+  int grid_reserve = 50000;
 };
 
 struct GridCell {
@@ -89,7 +109,7 @@ struct GridCell {
 
   std::vector<double> zs;
 
-  void CellGroundZ() {
+  void CellGroundZ(double quantile) {
     if (zs.empty()) {
       min_z = std::numeric_limits<double>::quiet_NaN();
       return;
@@ -97,7 +117,8 @@ struct GridCell {
 
     std::sort(zs.begin(), zs.end());
 
-    size_t k = static_cast<size_t>(0.20 * static_cast<double>(zs.size()));
+    quantile = std::clamp(quantile, 0.0, 1.0);
+    size_t k = static_cast<size_t>(quantile * static_cast<double>(zs.size()));
     k = std::min(k, zs.size() - 1);
     min_z = zs[k];
 
@@ -139,7 +160,6 @@ struct PlanarRegistrationResult {
   int matches = 0;
   double mean_residual = 0.0;
   bool valid = false;
-  ;
 };
 
 struct GroundPatch {
@@ -160,8 +180,8 @@ struct Voxel2D {
 class Segmentation {
  public:
   Segmentation(const GroundSegmentationParams& params) : params_(params) {
-    grid_.reserve(50000);  // tweak later
-    smoothed_ground_z_.reserve(50000);
+    grid_.reserve(params_.grid_reserve);
+    smoothed_ground_z_.reserve(params_.smoothed_grid_reserve);
   }
 
   SegmentationResult Classify(const CloudMsg& msg);
@@ -190,7 +210,7 @@ class GroundPatchExtractor {
   std::vector<GroundPatch> Extract(const CloudMsg& cloud,
                                    const std::vector<PointLabels>& labels);
   visualization_msgs::msg::MarkerArray MakeGroundPatchMarkers(
-      const std_msgs::msg::Header& header, double normal_scale = 0.7) const;
+      const std_msgs::msg::Header& header) const;
 
  private:
   GroundPatchParams params_;

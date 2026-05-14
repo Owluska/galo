@@ -5,23 +5,55 @@ galo:
       base_lat: 51.708812183333336
       utm_zone: 43
       northp: true
+    
     node:
       debug: 1
       max_ground_map_frames: 5
       max_planar_map_frames: 3
+      imu_orientation_queue_size: 2000
+      min_gnss_quality: 4
+      gnss_yaw_position_max_dt: 0.3
+      initialization_log_throttle: 1000
+      registration_log_throttle: 1000
+      min_ground_patches_for_map_update: 6
+      pose_dt_min: 0.001
+      pose_dt_max: 0.5
 
     pose_merge:
       alpha_xy: 0.3
       alpha_z: 0.8
       alpha_rp: 0.8
+      alpha_yaw: 0.8
       fallback_alpha_xy: 0.3
-      fallback_alpha_z_valid_ground: 0.1
+      fallback_alpha_z_valid_ground: 0.8
 
     frames:
       imu_frame: "imu"
       lidar_frame: "rslidar"
       pos_antenna_frame: "pos_antenna"
       orientation_antenna_frame: "orientation_antenna"
+      map_frame: "map"
+      body_frame: "base_link"
+      gnss_map_frame: "gnss_map"
+
+    topics:
+      lidar: "/Sensor/lidar_front/rslidar_points"
+      imu: "/Sensor/imu_front/data"
+      gnss: "/Sensor/gnss/trimble_nmea_gga"
+      gnss_orientation: "/Sensor/gnss/orientation"
+      pure_state: "/SC/pure_state"
+      wheel_speed: "/FB/wheel_speed_feedback"
+      wheel_angle: "/FB/wangle_feedback"
+      deskewed_cloud: "/GALO/deskewed_cloud"
+      colored_cloud: "/GALO/colored_cloud"
+      ground_patches: "/GALO/ground_patch_normals"
+      translation: "/GALO/translation"
+      gt_eulers: "/GALO/gt_eulers"
+      est_eulers: "/GALO/est_eulers"
+      pure_state_eulers: "/GALO/pure_state_eulers"
+      true_pose: "/GALO/true_pose"
+      estimate_pose: "/GALO/estimate_pose"
+      speed: "/GALO/speed"
 
     gnss_covariance:
       x_precision: 0.03
@@ -37,21 +69,35 @@ galo:
       scale: 1.0
       roll: 0.5
       pitch: 0.5
+      residual_norm: 0.1
+      residual_scale_min: 1.0
+      residual_scale_max: 5.0
+      match_count_norm: 100.0
+      match_count_scale_min: 1.0
+      match_count_scale_max: 3.0
+      yaw_base_deg: 2.0
 
     deskew:
       imu_queue_size: 1000
       lidar_queue_size: 10
+      speed_queue_size: 10
       scan_period: 0.1
       stamp_is_scan_end: true
       log_throttle: 2000
       debug: 0
+      min_time_epsilon: 0.000001
+      relative_time_tolerance: 0.001
+      azimuth_range_epsilon: 0.000001
 
     ground_segmentation:
-      cell_size: 2.0
+      cell_size: 3.0
       min_range: 5.0
       max_range: 70.0
       ground_height_threshold: 0.2
       min_points_per_cell: 10
+      ground_z_quantile: 0.20
+      grid_reserve: 50000
+      smoothed_grid_reserve: 50000
 
     ground_patch:
       cell_size: 6.0
@@ -59,6 +105,16 @@ galo:
       max_thickness: 0.35
       min_normal_z: 0.85
       max_surface_variation: 0.05
+      patch_reserve: 20000
+      valid_patch_reserve: 5000
+      marker_normal_scale: 0.7
+      marker_shaft_diameter: 0.08
+      marker_head_diameter: 0.10
+      marker_head_length: 0.12
+      marker_lifetime: 0.2
+      cell_marker_z_offset: 0.02
+      cell_marker_height: 0.03
+      cell_marker_alpha: 0.25
 
     ground_registration:
       max_match_distance: 10.0
@@ -78,6 +134,12 @@ galo:
       use_imu_prior: false
       log_throttle: 2000
       max_match_z_difference: 1.0
+      k_nearest_neighbors: 8
+      range_weight_coeff: 0.005
+      condition_lambda_floor: 0.000000001
+      min_condition_eigenvalue: 0.0001
+      max_condition_number: 1000000.0
+      convergence_eps: 0.00001
 
     ground_registration_gate_params:
       min_matches : 15
@@ -100,6 +162,7 @@ galo:
       max_dy_step: 2.0
       max_dyaw_step: 0.2
       convergence_eps: 0.00001
+      grid_reserve: 50000
 
     prediction:
       rear_track: 5.16
@@ -108,3 +171,8 @@ galo:
       max_jump: 2.0
       min_speed_for_turn_check: 0.2
       tau: 1.0
+      min_prediction_dt: 0.001
+      max_prediction_dt: 0.5
+      max_wheel_data_age: 0.3
+      min_valid_speed: 0.05
+      max_steering_correction: 0.5

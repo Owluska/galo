@@ -74,6 +74,9 @@ struct DeskewParams {
   bool stamp_is_scan_end_ = true;
   int log_throttle = 2000;  // ms
   int debug = 0;
+  double min_time_epsilon = 1e-6;
+  double relative_time_tolerance = 1e-3;
+  double azimuth_range_epsilon = 1e-6;
 };
 
 class DeskewAlgorithm {

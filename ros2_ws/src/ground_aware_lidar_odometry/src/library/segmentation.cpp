@@ -31,7 +31,7 @@ void Segmentation::FillGrid(const CloudMsg& msg) {
     cell.zs.push_back(z);
   }
   for (auto& [key, cell] : grid_) {
-    cell.CellGroundZ();
+    cell.CellGroundZ(params_.ground_z_quantile);
   }
 }
 
@@ -175,8 +175,8 @@ sensor_msgs::msg::PointCloud2 Segmentation::MakeColoredCloud(
 
 GroundPatchExtractor::GroundPatchExtractor(const GroundPatchParams& params)
     : params_(params) {
-  patches_.reserve(20000);
-  valid_patches_.reserve(5000);
+  patches_.reserve(params_.patch_reserve);
+  valid_patches_.reserve(params_.valid_patch_reserve);
 }
 
 std::pair<int, int> GroundPatchExtractor::GetIndexes(float x, float y) const {
@@ -271,7 +271,7 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
 
 visualization_msgs::msg::MarkerArray
 GroundPatchExtractor::MakeGroundPatchMarkers(
-    const std_msgs::msg::Header& header, double normal_scale) const {
+    const std_msgs::msg::Header& header) const {
   visualization_msgs::msg::MarkerArray markers;
 
   visualization_msgs::msg::Marker clear;
@@ -303,23 +303,23 @@ GroundPatchExtractor::MakeGroundPatchMarkers(
     p0.z = patch.centroid.z();
 
     geometry_msgs::msg::Point p1;
-    p1.x = patch.centroid.x() + normal_scale * patch.normal.x();
-    p1.y = patch.centroid.y() + normal_scale * patch.normal.y();
-    p1.z = patch.centroid.z() + normal_scale * patch.normal.z();
+    p1.x = patch.centroid.x() + params_.marker_normal_scale * patch.normal.x();
+    p1.y = patch.centroid.y() + params_.marker_normal_scale * patch.normal.y();
+    p1.z = patch.centroid.z() + params_.marker_normal_scale * patch.normal.z();
 
     marker.points.push_back(p0);
     marker.points.push_back(p1);
 
-    marker.scale.x = 0.08;  // shaft diameter
-    marker.scale.y = 0.10;  // head diameter
-    marker.scale.z = 0.12;  // head length
+    marker.scale.x = params_.marker_shaft_diameter;
+    marker.scale.y = params_.marker_head_diameter;
+    marker.scale.z = params_.marker_head_length;
 
     marker.color.r = 0.0f;
     marker.color.g = 0.6f;
     marker.color.b = 1.0f;
     marker.color.a = 1.0f;
 
-    marker.lifetime = rclcpp::Duration::from_seconds(0.2);
+    marker.lifetime = rclcpp::Duration::from_seconds(params_.marker_lifetime);
 
     markers.markers.push_back(marker);
 
@@ -332,20 +332,22 @@ GroundPatchExtractor::MakeGroundPatchMarkers(
 
     cell_marker.pose.position.x = patch.centroid.x();
     cell_marker.pose.position.y = patch.centroid.y();
-    cell_marker.pose.position.z = patch.centroid.z() + 0.02;
+    cell_marker.pose.position.z =
+        patch.centroid.z() + params_.cell_marker_z_offset;
 
     cell_marker.pose.orientation.w = 1.0;
 
     cell_marker.scale.x = params_.cell_size;
     cell_marker.scale.y = params_.cell_size;
-    cell_marker.scale.z = 0.03;
+    cell_marker.scale.z = params_.cell_marker_height;
 
     cell_marker.color.r = 0.0f;
     cell_marker.color.g = 0.8f;
     cell_marker.color.b = 1.0f;
-    cell_marker.color.a = 0.25f;
+    cell_marker.color.a = static_cast<float>(params_.cell_marker_alpha);
 
-    cell_marker.lifetime = rclcpp::Duration::from_seconds(0.2);
+    cell_marker.lifetime =
+        rclcpp::Duration::from_seconds(params_.marker_lifetime);
 
     markers.markers.push_back(cell_marker);
   }
@@ -422,7 +424,7 @@ int GroundRegistration::FindNearestPatchKDTree(
   query.y = static_cast<float>(p.y());
   query.z = 0.0f;
 
-  constexpr int K = 8;
+  const int K = std::max(params_.k_nearest_neighbors, 1);
 
   std::vector<int> indices(K);
   std::vector<float> dists2(K);
@@ -627,8 +629,6 @@ GroundRegistrationResult GroundRegistration::Align(
       // We keep only roll and pitch components. Yaw is intentionally not
       // optimized here because yaw comes from planar registration.
       Eigen::Matrix3d cur_skew = Skew(cur.centroid);
-      Eigen::Matrix3d dp_dtheta = -R * cur_skew;
-
       Eigen::RowVector3d J_rot = -n.transpose() * R * cur_skew;
 
       double J_roll = J_rot.x();
@@ -651,7 +651,8 @@ GroundRegistrationResult GroundRegistration::Align(
       //
       // Far ground patches often have larger noise and less reliable normals.
       double range = cur.centroid.head<2>().norm();
-      double range_weight = 1.0 / (1.0 + 0.005 * range * range);
+      double range_weight =
+          1.0 / (1.0 + params_.range_weight_coeff * range * range);
       weight *= range_weight;
 
       // Accumulate weighted normal equations:
@@ -704,8 +705,10 @@ GroundRegistrationResult GroundRegistration::Align(
 
     double lambda_min = evals(0);
     double lambda_max = evals(2);
-    double condition = lambda_max / std::max(lambda_min, 1e-9);
-    bool degenerate = lambda_min < 1e-4 || condition > 1e6;
+    double condition =
+        lambda_max / std::max(lambda_min, params_.condition_lambda_floor);
+    bool degenerate = lambda_min < params_.min_condition_eigenvalue ||
+                      condition > params_.max_condition_number;
 
     // Add separate damping for z, roll, and pitch.
     //
@@ -784,7 +787,7 @@ GroundRegistrationResult GroundRegistration::Align(
     final_matches = num_matches;
     final_abs_residual_sum = abs_residual_sum;
 
-    if (dx.norm() < 1e-5) {
+    if (dx.norm() < params_.convergence_eps) {
       break;
     }
   }
@@ -838,7 +841,7 @@ std::vector<Eigen::Vector2d> PlanarRegistration::ExtractPoints(
 std::vector<Eigen::Vector2d> PlanarRegistration::Filter(
     const std::vector<Eigen::Vector2d>& inp) const {
   std::unordered_map<CellKey, Voxel2D, CellKeyHash> grid_;
-  grid_.reserve(50000);
+  grid_.reserve(static_cast<size_t>(params_.grid_reserve));
 
   for (const auto& pt : inp) {
     int ix = std::floor(pt.x() / params_.voxel_size);

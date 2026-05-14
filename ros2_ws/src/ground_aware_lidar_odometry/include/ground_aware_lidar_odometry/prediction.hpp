@@ -31,6 +31,11 @@ struct PredictionParams {
   double max_jump = 2.0;           // m/s
   double min_speed_for_turn_check = 0.2;
   double tau = 1.0;
+  double min_prediction_dt = 1e-3;
+  double max_prediction_dt = 0.5;
+  double max_wheel_data_age = 0.3;
+  double min_valid_speed = 0.05;
+  double max_steering_correction = 0.5;
 };
 
 class PositionPredictor {
