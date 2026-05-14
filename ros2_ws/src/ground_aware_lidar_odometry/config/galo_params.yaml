@@ -18,6 +18,7 @@ galo:
       min_ground_patches_for_map_update: 6
       pose_dt_min: 0.001
       pose_dt_max: 0.5
+      elapsed_time_thresh: 50
 
     pose_merge:
       alpha_xy: 0.3
@@ -95,7 +96,7 @@ galo:
       max_range: 70.0
       ground_height_threshold: 0.2
       min_points_per_cell: 10
-      ground_z_quantile: 0.20
+      ground_z_quantile: 0.30
       grid_reserve: 50000
       smoothed_grid_reserve: 50000
 

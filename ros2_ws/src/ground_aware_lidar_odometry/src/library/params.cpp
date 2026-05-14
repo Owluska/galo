@@ -6,6 +6,8 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
   p.debug = DeclareAndGet<int>(node, "node.debug", p.debug);
   p.max_ground_map_frames = DeclareAndGet<int>(
       node, "node.max_ground_map_frames", p.max_ground_map_frames);
+  p.max_ground_map_frames = DeclareAndGet<int>(node, "node.elapsed_time_thresh",
+                                               p.elapsed_time_thresh);
   p.max_planar_map_frames = DeclareAndGet<int>(
       node, "node.max_planar_map_frames", p.max_planar_map_frames);
   p.merge_alpha_xy =
@@ -25,15 +27,12 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
       node, "node.imu_orientation_queue_size", p.imu_orientation_queue_size);
   p.min_gnss_quality =
       DeclareAndGet<int>(node, "node.min_gnss_quality", p.min_gnss_quality);
-  p.gnss_yaw_position_max_dt =
-      DeclareAndGet<double>(node, "node.gnss_yaw_position_max_dt",
-                            p.gnss_yaw_position_max_dt);
-  p.initialization_log_throttle =
-      DeclareAndGet<int>(node, "node.initialization_log_throttle",
-                         p.initialization_log_throttle);
-  p.registration_log_throttle =
-      DeclareAndGet<int>(node, "node.registration_log_throttle",
-                         p.registration_log_throttle);
+  p.gnss_yaw_position_max_dt = DeclareAndGet<double>(
+      node, "node.gnss_yaw_position_max_dt", p.gnss_yaw_position_max_dt);
+  p.initialization_log_throttle = DeclareAndGet<int>(
+      node, "node.initialization_log_throttle", p.initialization_log_throttle);
+  p.registration_log_throttle = DeclareAndGet<int>(
+      node, "node.registration_log_throttle", p.registration_log_throttle);
   p.min_ground_patches_for_map_update =
       DeclareAndGet<int>(node, "node.min_ground_patches_for_map_update",
                          p.min_ground_patches_for_map_update);
@@ -54,40 +53,37 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
       DeclareAndGet<std::string>(node, "frames.map_frame", p.map_frame);
   p.body_frame =
       DeclareAndGet<std::string>(node, "frames.body_frame", p.body_frame);
-  p.gnss_map_frame = DeclareAndGet<std::string>(
-      node, "frames.gnss_map_frame", p.gnss_map_frame);
+  p.gnss_map_frame = DeclareAndGet<std::string>(node, "frames.gnss_map_frame",
+                                                p.gnss_map_frame);
 
   p.lidar_topic =
       DeclareAndGet<std::string>(node, "topics.lidar", p.lidar_topic);
   p.imu_topic = DeclareAndGet<std::string>(node, "topics.imu", p.imu_topic);
-  p.gnss_topic =
-      DeclareAndGet<std::string>(node, "topics.gnss", p.gnss_topic);
-  p.gnss_orientation_topic =
-      DeclareAndGet<std::string>(node, "topics.gnss_orientation",
-                                 p.gnss_orientation_topic);
-  p.pure_state_topic = DeclareAndGet<std::string>(
-      node, "topics.pure_state", p.pure_state_topic);
-  p.wheel_speed_topic = DeclareAndGet<std::string>(
-      node, "topics.wheel_speed", p.wheel_speed_topic);
-  p.wheel_angle_topic = DeclareAndGet<std::string>(
-      node, "topics.wheel_angle", p.wheel_angle_topic);
+  p.gnss_topic = DeclareAndGet<std::string>(node, "topics.gnss", p.gnss_topic);
+  p.gnss_orientation_topic = DeclareAndGet<std::string>(
+      node, "topics.gnss_orientation", p.gnss_orientation_topic);
+  p.pure_state_topic =
+      DeclareAndGet<std::string>(node, "topics.pure_state", p.pure_state_topic);
+  p.wheel_speed_topic = DeclareAndGet<std::string>(node, "topics.wheel_speed",
+                                                   p.wheel_speed_topic);
+  p.wheel_angle_topic = DeclareAndGet<std::string>(node, "topics.wheel_angle",
+                                                   p.wheel_angle_topic);
   p.deskewed_cloud_topic = DeclareAndGet<std::string>(
       node, "topics.deskewed_cloud", p.deskewed_cloud_topic);
   p.colored_cloud_topic = DeclareAndGet<std::string>(
       node, "topics.colored_cloud", p.colored_cloud_topic);
   p.ground_patches_topic = DeclareAndGet<std::string>(
       node, "topics.ground_patches", p.ground_patches_topic);
-  p.translation_topic = DeclareAndGet<std::string>(
-      node, "topics.translation", p.translation_topic);
-  p.gt_eulers_topic = DeclareAndGet<std::string>(
-      node, "topics.gt_eulers", p.gt_eulers_topic);
-  p.est_eulers_topic = DeclareAndGet<std::string>(
-      node, "topics.est_eulers", p.est_eulers_topic);
-  p.pure_state_eulers_topic =
-      DeclareAndGet<std::string>(node, "topics.pure_state_eulers",
-                                 p.pure_state_eulers_topic);
-  p.true_pose_topic = DeclareAndGet<std::string>(
-      node, "topics.true_pose", p.true_pose_topic);
+  p.translation_topic = DeclareAndGet<std::string>(node, "topics.translation",
+                                                   p.translation_topic);
+  p.gt_eulers_topic =
+      DeclareAndGet<std::string>(node, "topics.gt_eulers", p.gt_eulers_topic);
+  p.est_eulers_topic =
+      DeclareAndGet<std::string>(node, "topics.est_eulers", p.est_eulers_topic);
+  p.pure_state_eulers_topic = DeclareAndGet<std::string>(
+      node, "topics.pure_state_eulers", p.pure_state_eulers_topic);
+  p.true_pose_topic =
+      DeclareAndGet<std::string>(node, "topics.true_pose", p.true_pose_topic);
   p.estimate_pose_topic = DeclareAndGet<std::string>(
       node, "topics.estimate_pose", p.estimate_pose_topic);
   p.speed_topic =
@@ -124,9 +120,8 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
   p.est_cov_.residual_scale_max =
       DeclareAndGet<double>(node, "lidar_covariance.residual_scale_max",
                             p.est_cov_.residual_scale_max);
-  p.est_cov_.match_count_norm =
-      DeclareAndGet<double>(node, "lidar_covariance.match_count_norm",
-                            p.est_cov_.match_count_norm);
+  p.est_cov_.match_count_norm = DeclareAndGet<double>(
+      node, "lidar_covariance.match_count_norm", p.est_cov_.match_count_norm);
   p.est_cov_.match_count_scale_min =
       DeclareAndGet<double>(node, "lidar_covariance.match_count_scale_min",
                             p.est_cov_.match_count_scale_min);
@@ -155,15 +150,12 @@ DeskewParams GALONode::LoadDeskewParams(rclcpp::Node& node) {
   p.log_throttle =
       DeclareAndGet<int>(node, "deskew.log_throttle", p.log_throttle);
   p.debug = DeclareAndGet<int>(node, "deskew.debug", p.debug);
-  p.min_time_epsilon =
-      DeclareAndGet<double>(node, "deskew.min_time_epsilon",
-                            p.min_time_epsilon);
-  p.relative_time_tolerance =
-      DeclareAndGet<double>(node, "deskew.relative_time_tolerance",
-                            p.relative_time_tolerance);
-  p.azimuth_range_epsilon =
-      DeclareAndGet<double>(node, "deskew.azimuth_range_epsilon",
-                            p.azimuth_range_epsilon);
+  p.min_time_epsilon = DeclareAndGet<double>(node, "deskew.min_time_epsilon",
+                                             p.min_time_epsilon);
+  p.relative_time_tolerance = DeclareAndGet<double>(
+      node, "deskew.relative_time_tolerance", p.relative_time_tolerance);
+  p.azimuth_range_epsilon = DeclareAndGet<double>(
+      node, "deskew.azimuth_range_epsilon", p.azimuth_range_epsilon);
 
   return p;
 }
@@ -183,12 +175,10 @@ GroundSegmentationParams GALONode::LoadGroundSegmentationParams(
                             p.ground_height_threshold);
   p.min_points_per_cell = DeclareAndGet<int>(
       node, "ground_segmentation.min_points_per_cell", p.min_points_per_cell);
-  p.ground_z_quantile =
-      DeclareAndGet<double>(node, "ground_segmentation.ground_z_quantile",
-                            p.ground_z_quantile);
-  p.grid_reserve =
-      DeclareAndGet<int>(node, "ground_segmentation.grid_reserve",
-                         p.grid_reserve);
+  p.ground_z_quantile = DeclareAndGet<double>(
+      node, "ground_segmentation.ground_z_quantile", p.ground_z_quantile);
+  p.grid_reserve = DeclareAndGet<int>(node, "ground_segmentation.grid_reserve",
+                                      p.grid_reserve);
   p.smoothed_grid_reserve =
       DeclareAndGet<int>(node, "ground_segmentation.smoothed_grid_reserve",
                          p.smoothed_grid_reserve);
@@ -214,26 +204,20 @@ GroundPatchParams GALONode::LoadGroundPatchParams(rclcpp::Node& node) {
       node, "ground_patch.valid_patch_reserve", p.valid_patch_reserve);
   p.marker_normal_scale = DeclareAndGet<double>(
       node, "ground_patch.marker_normal_scale", p.marker_normal_scale);
-  p.marker_shaft_diameter =
-      DeclareAndGet<double>(node, "ground_patch.marker_shaft_diameter",
-                            p.marker_shaft_diameter);
-  p.marker_head_diameter =
-      DeclareAndGet<double>(node, "ground_patch.marker_head_diameter",
-                            p.marker_head_diameter);
-  p.marker_head_length =
-      DeclareAndGet<double>(node, "ground_patch.marker_head_length",
-                            p.marker_head_length);
+  p.marker_shaft_diameter = DeclareAndGet<double>(
+      node, "ground_patch.marker_shaft_diameter", p.marker_shaft_diameter);
+  p.marker_head_diameter = DeclareAndGet<double>(
+      node, "ground_patch.marker_head_diameter", p.marker_head_diameter);
+  p.marker_head_length = DeclareAndGet<double>(
+      node, "ground_patch.marker_head_length", p.marker_head_length);
   p.marker_lifetime = DeclareAndGet<double>(
       node, "ground_patch.marker_lifetime", p.marker_lifetime);
-  p.cell_marker_z_offset =
-      DeclareAndGet<double>(node, "ground_patch.cell_marker_z_offset",
-                            p.cell_marker_z_offset);
-  p.cell_marker_height =
-      DeclareAndGet<double>(node, "ground_patch.cell_marker_height",
-                            p.cell_marker_height);
-  p.cell_marker_alpha =
-      DeclareAndGet<double>(node, "ground_patch.cell_marker_alpha",
-                            p.cell_marker_alpha);
+  p.cell_marker_z_offset = DeclareAndGet<double>(
+      node, "ground_patch.cell_marker_z_offset", p.cell_marker_z_offset);
+  p.cell_marker_height = DeclareAndGet<double>(
+      node, "ground_patch.cell_marker_height", p.cell_marker_height);
+  p.cell_marker_alpha = DeclareAndGet<double>(
+      node, "ground_patch.cell_marker_alpha", p.cell_marker_alpha);
 
   return p;
 }
@@ -283,24 +267,20 @@ GroundRegistrationParams GALONode::LoadGroundRegistrationParams(
   p.max_match_z_difference =
       DeclareAndGet<double>(node, "ground_registration.max_match_z_difference",
                             p.max_match_z_difference);
-  p.k_nearest_neighbors =
-      DeclareAndGet<int>(node, "ground_registration.k_nearest_neighbors",
-                         p.k_nearest_neighbors);
-  p.range_weight_coeff =
-      DeclareAndGet<double>(node, "ground_registration.range_weight_coeff",
-                            p.range_weight_coeff);
+  p.k_nearest_neighbors = DeclareAndGet<int>(
+      node, "ground_registration.k_nearest_neighbors", p.k_nearest_neighbors);
+  p.range_weight_coeff = DeclareAndGet<double>(
+      node, "ground_registration.range_weight_coeff", p.range_weight_coeff);
   p.condition_lambda_floor =
       DeclareAndGet<double>(node, "ground_registration.condition_lambda_floor",
                             p.condition_lambda_floor);
   p.min_condition_eigenvalue = DeclareAndGet<double>(
       node, "ground_registration.min_condition_eigenvalue",
       p.min_condition_eigenvalue);
-  p.max_condition_number =
-      DeclareAndGet<double>(node, "ground_registration.max_condition_number",
-                            p.max_condition_number);
-  p.convergence_eps =
-      DeclareAndGet<double>(node, "ground_registration.convergence_eps",
-                            p.convergence_eps);
+  p.max_condition_number = DeclareAndGet<double>(
+      node, "ground_registration.max_condition_number", p.max_condition_number);
+  p.convergence_eps = DeclareAndGet<double>(
+      node, "ground_registration.convergence_eps", p.convergence_eps);
 
   return p;
 }
@@ -364,11 +344,10 @@ PredictionParams GALONode::LoadPredictionParams(rclcpp::Node& node) {
       node, "prediction.max_prediction_dt", p.max_prediction_dt);
   p.max_wheel_data_age = DeclareAndGet<double>(
       node, "prediction.max_wheel_data_age", p.max_wheel_data_age);
-  p.min_valid_speed = DeclareAndGet<double>(
-      node, "prediction.min_valid_speed", p.min_valid_speed);
-  p.max_steering_correction =
-      DeclareAndGet<double>(node, "prediction.max_steering_correction",
-                            p.max_steering_correction);
+  p.min_valid_speed = DeclareAndGet<double>(node, "prediction.min_valid_speed",
+                                            p.min_valid_speed);
+  p.max_steering_correction = DeclareAndGet<double>(
+      node, "prediction.max_steering_correction", p.max_steering_correction);
 
   return p;
 }

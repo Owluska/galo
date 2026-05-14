@@ -7,6 +7,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <robot_localization/navsat_conversions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -25,6 +26,7 @@
 #include "qarl_msgs/msg/nmea_gga.hpp"
 #include "qarl_msgs/msg/orientation_stamped.hpp"
 #include "qarl_msgs/msg/w_angle_feedback.hpp"
+#include "rclcpp/callback_group.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
@@ -55,17 +57,26 @@ struct LidarCovariance {
   double scale = 1.0;
   double roll = 0.5;   // rad^2
   double pitch = 0.5;  // rad^2
+  double residual_norm = 0.1;
+  double residual_scale_min = 1.0;
+  double residual_scale_max = 5.0;
+  double match_count_norm = 100.0;
+  double match_count_scale_min = 1.0;
+  double match_count_scale_max = 3.0;
+  double yaw_base_deg = 2.0;
 
   std::tuple<double, double> GetXYYawSigmas(
       const PlanarRegistrationResult& res) {
-    auto scale = 1;
+    double scale = 1.0;
     // worse if residual high
-    scale *= std::clamp(res.mean_residual / 0.1, 1.0, 5.0);
+    scale *= std::clamp(res.mean_residual / residual_norm, residual_scale_min,
+                        residual_scale_max);
     // worse if few matches
-    scale *= std::clamp(100.0 / std::max(res.matches, 1), 1.0, 3.0);
+    scale *= std::clamp(match_count_norm / std::max(res.matches, 1),
+                        match_count_scale_min, match_count_scale_max);
 
     double sigma_xy = base_xy * scale;
-    double sigma_yaw = 2.0 * M_PI / 180.0 * scale;  // 2 deg base
+    double sigma_yaw = yaw_base_deg * M_PI / 180.0 * scale;
     return std::make_tuple(sigma_xy, sigma_yaw);
   }
 };
@@ -77,8 +88,42 @@ struct GALONodeParams {
   double merge_alpha_xy = 0.3;
   double merge_alpha_z = 0.3;
   double merge_alpha_rp = 0.2;
+  double merge_alpha_yaw = 0.8;
   double fallback_alpha_xy = 0.3;
   double fallback_alpha_z_valid_ground = 0.02;
+  int imu_orientation_queue_size = 2000;
+  int min_gnss_quality = 4;
+  double gnss_yaw_position_max_dt = 0.3;
+  int initialization_log_throttle = 1000;
+  int registration_log_throttle = 1000;
+  int min_ground_patches_for_map_update = 6;
+  double pose_dt_min = 1e-3;
+  double pose_dt_max = 0.5;
+  double elapsed_time_thresh = 50.0;  // ms
+  std::string imu_frame = "imu";
+  std::string lidar_frame = "rslidar";
+  std::string pos_antenna_frame = "pos_antenna";
+  std::string orientation_antenna_frame = "orientation_antenna";
+  std::string map_frame = "map";
+  std::string body_frame = "base_link";
+  std::string gnss_map_frame = "gnss_map";
+  std::string lidar_topic = "/Sensor/lidar_front/rslidar_points";
+  std::string imu_topic = "/Sensor/imu_front/data";
+  std::string gnss_topic = "/Sensor/gnss/trimble_nmea_gga";
+  std::string gnss_orientation_topic = "/Sensor/gnss/orientation";
+  std::string pure_state_topic = "/SC/pure_state";
+  std::string wheel_speed_topic = "/FB/wheel_speed_feedback";
+  std::string wheel_angle_topic = "/FB/wangle_feedback";
+  std::string deskewed_cloud_topic = "/GALO/deskewed_cloud";
+  std::string colored_cloud_topic = "/GALO/colored_cloud";
+  std::string ground_patches_topic = "/GALO/ground_patch_normals";
+  std::string translation_topic = "/GALO/translation";
+  std::string gt_eulers_topic = "/GALO/gt_eulers";
+  std::string est_eulers_topic = "/GALO/est_eulers";
+  std::string pure_state_eulers_topic = "/GALO/pure_state_eulers";
+  std::string true_pose_topic = "/GALO/true_pose";
+  std::string estimate_pose_topic = "/GALO/estimate_pose";
+  std::string speed_topic = "/GALO/speed";
   GnssCovariance gt_cov_;
   LidarCovariance est_cov_;
 };
@@ -150,6 +195,9 @@ class GALONode : public rclcpp::Node {
       gnss_orientation_sub_;
 
   rclcpp::Subscription<common_msgs::msg::PureState>::SharedPtr pure_state_sub_;
+  rclcpp::CallbackGroup::SharedPtr lidar_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr other_callback_group_;
+
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskew_cld_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr colored_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
@@ -230,7 +278,7 @@ class GALONode : public rclcpp::Node {
   Eigen::Matrix3d MergeGroundAndPlanarRotation(const Eigen::Matrix3d& R_ground,
                                                const Eigen::Matrix3d& R_prior,
                                                const Eigen::Matrix2d& R_planar,
-                                               double alpha_rp);
+                                               double alpha_rp, double alpha_y);
   bool TryInitializeOdomFromGnss();
   bool CheckGroundRegistration(const GroundRegistrationResult& res);
 
