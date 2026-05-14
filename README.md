@@ -302,13 +302,35 @@ Run the node directly:
 ```bash
 ros2 run ground_aware_lidar_odometry node
 ```
-
-Or launch it with a launch file if available:
+but better via launch file:
 
 ```bash
-ros2 launch ground_aware_lidar_odometry <launch_file>.launch.py
+ros2 launch ground_aware_lidar_odometry galo.launch.py
 ```
 
+or in sim mode:
+
+```bash
+ros2 launch ground_aware_lidar_odometry galo.launch.py use_sim_time:=True
+```
+
+if TF publication needed:
+
+```bash
+ros2 launch static_tf_publisher static_tf.launch.py
+```
+
+if Foxglove needed:
+
+```bash
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+```
+
+example for running bag comand:
+
+```bash
+ros2 bag play 109_2025-08-14-19-24-54_1213e_ros2 --clock --topics /tf /Sensor/imu_front/data /Sensor/lidar_front/rslidar_points /Sensor/gnss/trimble_nmea_gga /Sensor/gnss/orientation /SC/state /SC/pure_state /FB/wangle_feedback /FB/wheel_speed_feedback -r 0.5
+```
 ---
 
 ## TF Requirements
@@ -425,6 +447,4 @@ TODO: Add license.
 
 TODO: Add author information.
 
-```
-```
 
