@@ -168,6 +168,51 @@ except Exception as e:
 
   echo "✅ Done! Native ROS 2 bag is ready at: $output_dir"
 }
+
+play_galo_bag() {
+  local DEFAULT_RATE=1.0
+  local RATE
+  local bags=()
+
+  # Show usage if no arguments
+  if [[ $# -eq 0 ]]; then
+    echo "Usage: play_galo bag1 [bag2 ...] [rate]"
+    return 1
+  fi
+
+  # Check if the last argument is a number (rate)
+  if [[ $argv[-1] =~ '^[0-9]+(\.[0-9]+)?$' ]]; then
+    RATE=$argv[-1]
+    bags=(${argv[1,-2]})   # all arguments except the last
+  else
+    RATE=$DEFAULT_RATE
+    bags=($argv)           # all arguments are bag files
+  fi
+
+  # Play each bag sequentially
+  for bag in $bags; do
+    echo "Playing $bag at rate $RATE"
+    ros2 bag play "$bag" --clock --topics \
+      /tf /Sensor/imu_front/data \
+      /Sensor/lidar_front/rslidar_points \
+      /Sensor/gnss/trimble_nmea_gga \
+      /Sensor/gnss/orientation \
+      /SC/state /SC/pure_state \
+      /FB/wangle_feedback \
+      /FB/wheel_speed_feedback \
+      -r "$RATE"
+  done
+}
+
+# # Play two bags with default rate (1.0)
+# play_galo bag1.db3 bag2.db3
+
+# # Play three bags with rate 0.5 (last argument is the rate)
+# play_galo bag1.db3 bag2.db3 bag3.db3 0.5
+
+# # Play a single bag with custom rate
+# play_galo mybag.db3 2.0
+
 autoload -U compinit && compinit
 source /opt/ros/${ROS_DISTRO}/setup.zsh
 [ -f ${WS}/install/setup.zsh ] && source ${WS}/install/setup.zsh
