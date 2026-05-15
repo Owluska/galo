@@ -144,6 +144,13 @@ struct PlanarMapFrame {
   double time = 0.0;
 };
 
+struct FrameFeatures {
+  CloudMsg cloud;
+  std::vector<Eigen::Vector2d> planar_points;
+  std::vector<GroundPatch> ground_patches;
+  double lidar_time = 0.0;
+};
+
 struct GnssData {
   Eigen::Vector3d gnss_local_;
   double yaw;
@@ -183,7 +190,6 @@ class GALONode : public rclcpp::Node {
   std::mutex mut_;
 
   GALONodeParams node_params_;
-  DeskewParams deskew_prms_;
   GroundSegmentationParams segementation_params_;
   GroundPatchParams ground_patch_params_;
   GroundRegistrationParams ground_registration_params_;
@@ -245,7 +251,6 @@ class GALONode : public rclcpp::Node {
   GnssData gnss_data_;
   WheelSpeedAngleData wheel_data;
   GnssLocalConverter gnss_converter_;
-  DeskewAlgorithm deskew_algo_;
   Segmentation segmentation_;
   GroundPatchExtractor ground_patches_extractor_;
   GroundRegistration ground_registration_;
@@ -264,6 +269,8 @@ class GALONode : public rclcpp::Node {
   void PrintTimeMeasurments(const std::vector<TimeMeasurments_t>& measurments);
 
   void ProcessCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+  FrameFeatures ExtractFrameFeatures(const CloudMsg& cloud);
+  void EstimatePoseFromFeatures(const FrameFeatures& features);
   bool GetExtrinsicTf(tf2_ros::Buffer& tf_buffer, const std::string& imu_frame,
                       const std::string& lidar_frame);
   std::optional<Eigen::Quaterniond> GetImuOrientationAt(

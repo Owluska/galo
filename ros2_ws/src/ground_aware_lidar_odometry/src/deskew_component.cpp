@@ -1,0 +1,215 @@
+#include "ground_aware_lidar_odometry/deskew_component.hpp"
+
+#include "rclcpp_components/register_node_macro.hpp"
+
+namespace ground_aware_lidar_odometry {
+namespace {
+
+template <typename T>
+T DeclareAndGet(rclcpp::Node& node, const std::string& name,
+                const T& default_value) {
+  return node.declare_parameter<T>(name, default_value);
+}
+
+}  // namespace
+
+GaloDeskewComponent::GaloDeskewComponent(const rclcpp::NodeOptions& options)
+    : Node("galo_deskew", options),
+      params_(LoadParams(*this)),
+      deskew_params_(LoadDeskewParams(*this)),
+      prediction_params_(LoadPredictionParams(*this)),
+      position_predictor_(prediction_params_),
+      deskew_algorithm_(deskew_params_, this->get_logger(),
+                        *this->get_clock()) {
+  tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+  lidar_callback_group_ =
+      this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  sensor_callback_group_ =
+      this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+  rclcpp::SubscriptionOptions lidar_options;
+  lidar_options.callback_group = lidar_callback_group_;
+
+  rclcpp::SubscriptionOptions sensor_options;
+  sensor_options.callback_group = sensor_callback_group_;
+
+  lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+      params_.lidar_topic, 10,
+      std::bind(&GaloDeskewComponent::LidarCb, this, std::placeholders::_1),
+      lidar_options);
+  imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
+      params_.imu_topic, 100,
+      std::bind(&GaloDeskewComponent::ImuCb, this, std::placeholders::_1),
+      sensor_options);
+  wheel_speed_sub_ =
+      this->create_subscription<common_msgs::msg::WheelSpeed>(
+          params_.wheel_speed_topic, 10,
+          std::bind(&GaloDeskewComponent::WheelSpeedCb, this,
+                    std::placeholders::_1),
+          sensor_options);
+  wheel_angle_sub_ =
+      this->create_subscription<qarl_msgs::msg::WAngleFeedback>(
+          params_.wheel_angle_topic, 10,
+          std::bind(&GaloDeskewComponent::WheelAngleCb, this,
+                    std::placeholders::_1),
+          sensor_options);
+  deskew_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      params_.deskewed_cloud_topic, 1);
+
+  RCLCPP_INFO(this->get_logger(),
+              "GALO deskew component: %s -> %s",
+              params_.lidar_topic.c_str(), params_.deskewed_cloud_topic.c_str());
+}
+
+void GaloDeskewComponent::LidarCb(
+    const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+  if (!EnsureLidarBodyTf()) {
+    return;
+  }
+
+  std::optional<sensor_msgs::msg::PointCloud2> deskewed;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    deskew_algorithm_.UpdateLidarQueue(msg);
+    deskewed =
+        deskew_algorithm_.ProcessCloudsQueue(q_lidar_body_.toRotationMatrix());
+  }
+
+  if (deskewed) {
+    deskew_pub_->publish(*deskewed);
+  }
+}
+
+void GaloDeskewComponent::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  deskew_algorithm_.UpdateImuQueue(
+      msg->angular_velocity.z, rclcpp::Time(msg->header.stamp).seconds());
+}
+
+void GaloDeskewComponent::WheelSpeedCb(
+    const common_msgs::msg::WheelSpeed::SharedPtr msg) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  wheel_data_.wheel_angle = last_wheel_angle_;
+  wheel_data_.left_speed = msg->rear_left;
+  wheel_data_.right_speed = msg->rear_right;
+  wheel_data_.wheel_time = rclcpp::Time(msg->header.stamp).seconds();
+  wheel_data_.has_wheel_data = true;
+
+  const RearWheelSpeedResult speed_result =
+      position_predictor_.EstimateRearAxleSpeed(wheel_data_);
+  if (speed_result.valid) {
+    deskew_algorithm_.UpdateSpeedQueue(speed_result.speed,
+                                       wheel_data_.wheel_time);
+  }
+}
+
+void GaloDeskewComponent::WheelAngleCb(
+    const qarl_msgs::msg::WAngleFeedback::SharedPtr msg) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  last_wheel_angle_ = msg->wangle;
+}
+
+bool GaloDeskewComponent::EnsureLidarBodyTf() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (has_lidar_body_tf_) {
+    return true;
+  }
+
+  try {
+    const geometry_msgs::msg::TransformStamped tf_msg =
+        tf_buffer_->lookupTransform(params_.lidar_frame, params_.body_frame,
+                                    tf2::TimePointZero);
+    q_lidar_body_ = Eigen::Quaterniond(
+        tf_msg.transform.rotation.w, tf_msg.transform.rotation.x,
+        tf_msg.transform.rotation.y, tf_msg.transform.rotation.z);
+    q_lidar_body_.normalize();
+    t_lidar_body_ = Eigen::Vector3d(tf_msg.transform.translation.x,
+                                    tf_msg.transform.translation.y,
+                                    tf_msg.transform.translation.z);
+    has_lidar_body_tf_ = true;
+  } catch (const tf2::TransformException& ex) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(),
+                         deskew_params_.log_throttle,
+                         "Failed to get TF %s <- %s: %s",
+                         params_.lidar_frame.c_str(),
+                         params_.body_frame.c_str(), ex.what());
+    return false;
+  }
+
+  return true;
+}
+
+GaloDeskewComponent::Params GaloDeskewComponent::LoadParams(
+    rclcpp::Node& node) {
+  Params p;
+  p.lidar_frame =
+      DeclareAndGet<std::string>(node, "frames.lidar_frame", p.lidar_frame);
+  p.body_frame =
+      DeclareAndGet<std::string>(node, "frames.body_frame", p.body_frame);
+  p.lidar_topic =
+      DeclareAndGet<std::string>(node, "topics.lidar", p.lidar_topic);
+  p.imu_topic = DeclareAndGet<std::string>(node, "topics.imu", p.imu_topic);
+  p.wheel_speed_topic = DeclareAndGet<std::string>(node, "topics.wheel_speed",
+                                                   p.wheel_speed_topic);
+  p.wheel_angle_topic = DeclareAndGet<std::string>(node, "topics.wheel_angle",
+                                                   p.wheel_angle_topic);
+  p.deskewed_cloud_topic = DeclareAndGet<std::string>(
+      node, "topics.deskewed_cloud", p.deskewed_cloud_topic);
+  return p;
+}
+
+DeskewParams GaloDeskewComponent::LoadDeskewParams(rclcpp::Node& node) {
+  DeskewParams p;
+  p.imu_queue_size =
+      DeclareAndGet<int>(node, "deskew.imu_queue_size", p.imu_queue_size);
+  p.lidar_queue_size =
+      DeclareAndGet<int>(node, "deskew.lidar_queue_size", p.lidar_queue_size);
+  p.speed_queue_size =
+      DeclareAndGet<int>(node, "deskew.speed_queue_size", p.speed_queue_size);
+  p.scan_period_ =
+      DeclareAndGet<double>(node, "deskew.scan_period", p.scan_period_);
+  p.stamp_is_scan_end_ = DeclareAndGet<bool>(node, "deskew.stamp_is_scan_end",
+                                             p.stamp_is_scan_end_);
+  p.log_throttle =
+      DeclareAndGet<int>(node, "deskew.log_throttle", p.log_throttle);
+  p.debug = DeclareAndGet<int>(node, "deskew.debug", p.debug);
+  p.min_time_epsilon = DeclareAndGet<double>(node, "deskew.min_time_epsilon",
+                                             p.min_time_epsilon);
+  p.relative_time_tolerance = DeclareAndGet<double>(
+      node, "deskew.relative_time_tolerance", p.relative_time_tolerance);
+  p.azimuth_range_epsilon = DeclareAndGet<double>(
+      node, "deskew.azimuth_range_epsilon", p.azimuth_range_epsilon);
+  return p;
+}
+
+PredictionParams GaloDeskewComponent::LoadPredictionParams(rclcpp::Node& node) {
+  PredictionParams p;
+  p.rear_track_ =
+      DeclareAndGet<double>(node, "prediction.rear_track", p.rear_track_);
+  p.wheelbase_ =
+      DeclareAndGet<double>(node, "prediction.wheelbase", p.wheelbase_);
+  p.max_diff_residual = DeclareAndGet<double>(
+      node, "prediction.max_diff_residual", p.max_diff_residual);
+  p.max_jump = DeclareAndGet<double>(node, "prediction.max_jump", p.max_jump);
+  p.min_speed_for_turn_check = DeclareAndGet<double>(
+      node, "prediction.min_speed_for_turn_check", p.min_speed_for_turn_check);
+  p.tau = DeclareAndGet<double>(node, "prediction.tau", p.tau);
+  p.min_prediction_dt = DeclareAndGet<double>(
+      node, "prediction.min_prediction_dt", p.min_prediction_dt);
+  p.max_prediction_dt = DeclareAndGet<double>(
+      node, "prediction.max_prediction_dt", p.max_prediction_dt);
+  p.max_wheel_data_age = DeclareAndGet<double>(
+      node, "prediction.max_wheel_data_age", p.max_wheel_data_age);
+  p.min_valid_speed = DeclareAndGet<double>(node, "prediction.min_valid_speed",
+                                            p.min_valid_speed);
+  p.max_steering_correction = DeclareAndGet<double>(
+      node, "prediction.max_steering_correction", p.max_steering_correction);
+  return p;
+}
+
+}  // namespace ground_aware_lidar_odometry
+
+RCLCPP_COMPONENTS_REGISTER_NODE(
+    ground_aware_lidar_odometry::GaloDeskewComponent)

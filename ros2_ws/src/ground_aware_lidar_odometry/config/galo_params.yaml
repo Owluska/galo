@@ -9,7 +9,7 @@ galo:
     node:
       debug: 1
       max_ground_map_frames: 6
-      max_planar_map_frames: 3
+      max_planar_map_frames: 6
       imu_orientation_queue_size: 2000
       min_gnss_quality: 4
       gnss_yaw_position_max_dt: 0.3
@@ -18,7 +18,8 @@ galo:
       min_ground_patches_for_map_update: 6
       pose_dt_min: 0.001
       pose_dt_max: 0.5
-      elapsed_time_thresh: 50
+      elapsed_time_thresh: 50.0
+      map_stale_threshold_ms: 1000.0
       gnss_correction_period_sec: 120.0 #120.0
 
     pose_merge:
@@ -104,7 +105,7 @@ galo:
       smoothed_grid_reserve: 50000
 
     ground_patch:
-      cell_size: 5.0
+      cell_size: 10.0
       min_points: 20
       max_thickness: 0.35
       min_normal_z: 0.85
@@ -121,7 +122,7 @@ galo:
       cell_marker_alpha: 0.25
 
     ground_registration:
-      max_match_distance: 8.0
+      max_match_distance: 15.0
       min_normal_dot: 0.75
       max_iterations: 10
       min_matches: 4
@@ -138,7 +139,7 @@ galo:
       use_imu_prior: false
       log_throttle: 2000
       max_match_z_difference: 1.0
-      k_nearest_neighbors: 8
+      k_nearest_neighbors: 10
       range_weight_coeff: 0.005
       condition_lambda_floor: 0.000000001
       min_condition_eigenvalue: 0.0001
@@ -146,16 +147,16 @@ galo:
       convergence_eps: 0.00001
 
     ground_registration_gate_params:
-      min_matches : 15
-      max_residual : 0.35
+      min_matches : 10
+      max_residual : 0.4
       max_droll : 5.0   # deg
       max_dpitch : 5.0  # deg
       max_dz : 1.0      # m
 
     planar_registration:
       voxel_size: 2.0
-      max_match_distance: 2.0
-      min_points_per_voxel: 12
+      max_match_distance: 3.0
+      min_points_per_voxel: 10
       max_iterations: 6
       min_matches: 20
       damping: 0.0001

@@ -5,7 +5,6 @@
 GALONode::GALONode()
     : Node("galo"),
       node_params_(LoadNodeParams(*this)),
-      deskew_prms_(LoadDeskewParams(*this)),
       segementation_params_(LoadGroundSegmentationParams(*this)),
       ground_patch_params_(LoadGroundPatchParams(*this)),
       ground_registration_params_(LoadGroundRegistrationParams(*this)),
@@ -20,8 +19,7 @@ GALONode::GALONode()
       ground_registration_(ground_registration_params_, this->get_logger(),
                            *this->get_clock()),
       planar_registration_(planar_registration_params_, this->get_logger(),
-                           *this->get_clock()),
-      deskew_algo_(deskew_prms_, this->get_logger(), *this->get_clock()) {
+                           *this->get_clock()) {
   imu_frame = node_params_.imu_frame;
   lidar_frame = node_params_.lidar_frame;
   pos_antena_frame = node_params_.pos_antenna_frame;
@@ -46,7 +44,7 @@ GALONode::GALONode()
 
   RCLCPP_INFO(this->get_logger(), "Loaded GALO parameters from ROS params");
   lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      node_params_.lidar_topic, 10,
+      node_params_.deskewed_cloud_topic, 10,
       std::bind(&GALONode::LidarCb, this, std::placeholders::_1),
       lidar_sub_options);
 
@@ -129,9 +127,7 @@ void GALONode::WheelSpeedCb(const common_msgs::msg::WheelSpeed::SharedPtr msg) {
   wheel_data.has_wheel_data = true;
   RearWheelSpeedResult speed_res =
       position_predictor_.EstimateRearAxleSpeed(wheel_data);
-  if (speed_res.valid) {
-    deskew_algo_.UpdateSpeedQueue(speed_res.speed, wheel_data.wheel_time);
-  }
+  (void)speed_res;
 }
 
 void GALONode::PureStateCb(const common_msgs::msg::PureState::SharedPtr msg) {
@@ -331,14 +327,16 @@ void GALONode::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
     imu_q_prev_ = imu_q_curr;
     has_imu_prev_ = true;
 
-    deskew_algo_.UpdateImuQueue(msg->angular_velocity.z, msg_time.seconds());
+    (void)msg_time;
   }
 }
 
 void GALONode::LidarCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   // Main LiDAR pipeline:
   //
-  //   1. Deskew cloud
+  // Main odometry backend pipeline:
+  //
+  //   1. Receive deskewed cloud
   //   2. Segment ground/non-ground
   //   3. Extract planar/non-ground points
   //   4. Extract ground patches
@@ -358,29 +356,19 @@ void GALONode::ProcessCloud(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   time_measurments.clear();
 
-  if (!GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame)) {
-    return;
-  }
+  const FrameFeatures features = ExtractFrameFeatures(*msg);
+  EstimatePoseFromFeatures(features);
+}
 
-  std::optional<sensor_msgs::msg::PointCloud2> deskewed;
+FrameFeatures GALONode::ExtractFrameFeatures(const CloudMsg& cloud) {
+  FrameFeatures features;
+  features.cloud = cloud;
+  features.lidar_time = rclcpp::Time(cloud.header.stamp).seconds();
 
-  {
-    TimeMeasurments_t meas("deskew");
-    std::lock_guard<std::mutex> lock(mut_);
-
-    deskew_algo_.UpdateLidarQueue(msg);
-    deskewed = deskew_algo_.ProcessCloudsQueue(q_lidar_body.toRotationMatrix());
-
-    meas.SetEnd();
-    time_measurments.push_back(meas);
-  }
-
-  if (!deskewed) return;
   SegmentationResult segmentation_result;
-  deskew_cld_pub_->publish(*deskewed);
   {
     TimeMeasurments_t meas("segmentaion");
-    segmentation_result = segmentation_.Classify(*deskewed);
+    segmentation_result = segmentation_.Classify(cloud);
     meas.SetEnd();
     time_measurments.push_back(meas);
     if (node_params_.debug) {
@@ -388,32 +376,36 @@ void GALONode::ProcessCloud(
       colored_pub_->publish(colored_cld);
     }
   }
-  std::vector<Eigen::Vector2d> cur_planar_points;
   {
     TimeMeasurments_t meas("objects_extration");
-    cur_planar_points = planar_registration_.ExtractPoints(
-        *deskewed, segmentation_result.labels);
-    if (cur_planar_points.size()) {
-      cur_planar_points = planar_registration_.Filter(cur_planar_points);
+    features.planar_points = planar_registration_.ExtractPoints(
+        cloud, segmentation_result.labels);
+    if (features.planar_points.size()) {
+      features.planar_points = planar_registration_.Filter(
+          features.planar_points);
     }
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
-  std::vector<GroundPatch> cur_patches;
   {
     TimeMeasurments_t meas("ground_extration");
-    cur_patches = ground_patches_extractor_.Extract(*deskewed,
-                                                    segmentation_result.labels);
+    features.ground_patches =
+        ground_patches_extractor_.Extract(cloud, segmentation_result.labels);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
 
   if (node_params_.debug) {
     auto patches_marker =
-        ground_patches_extractor_.MakeGroundPatchMarkers(deskewed->header);
+        ground_patches_extractor_.MakeGroundPatchMarkers(cloud.header);
     ground_patches_pub_->publish(patches_marker);
   }
-  const double lidar_time = rclcpp::Time(deskewed->header.stamp).seconds();
+
+  return features;
+}
+
+void GALONode::EstimatePoseFromFeatures(const FrameFeatures& features) {
+  const double lidar_time = features.lidar_time;
   if (!TryInitializeOdomFromGnss()) {
     RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(),
@@ -431,11 +423,13 @@ void GALONode::ProcessCloud(
                 ground_map_.size(), objects_map_.size());
 
     auto patches_in_map =
-        TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar);
+        TransformPatchesToMap(features.ground_patches, R_map_lidar_,
+                              t_map_lidar);
     ground_map_frames_.push_back(GroundPatchFrame{patches_in_map, lidar_time});
 
     auto planar_points_in_map =
-        TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar);
+        TransformPointsToMap(features.planar_points, R_map_lidar_,
+                             t_map_lidar);
     objects_map_frames_.push_back(PlanarMapFrame{planar_points_in_map,
                                                  lidar_time});
     PruneStaleMapFrames(lidar_time);
@@ -530,7 +524,8 @@ void GALONode::ProcessCloud(
     Eigen::Vector2d t_planar_initial(pred.t.x(), pred.t.y());
     TimeMeasurments_t meas("planar_registration");
     planar_reg_res = planar_registration_.Align(
-        objects_map_, cur_planar_points, R_planar_initial, t_planar_initial);
+        objects_map_, features.planar_points, R_planar_initial,
+        t_planar_initial);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
@@ -565,8 +560,9 @@ void GALONode::ProcessCloud(
             .toRotationMatrix();
     TimeMeasurments_t meas("ground_registration");
     ground_reg_result =
-        ground_registration_.Align(ground_map_, cur_patches, R_imu_prior_map,
-                                   R_ground_initial, t_ground_initial);
+        ground_registration_.Align(ground_map_, features.ground_patches,
+                                   R_imu_prior_map, R_ground_initial,
+                                   t_ground_initial);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
@@ -635,7 +631,7 @@ void GALONode::ProcessCloud(
   prev_lidar_pose_time_ = lidar_time;
   has_prev_lidar_pose_for_prediction_ = true;
   auto planar_points_in_map =
-      TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar);
+      TransformPointsToMap(features.planar_points, R_map_lidar_, t_map_lidar);
 
   objects_map_frames_.push_back(PlanarMapFrame{planar_points_in_map,
                                                lidar_time});
@@ -645,11 +641,12 @@ void GALONode::ProcessCloud(
     objects_map_frames_.pop_front();
   }
 
-  if (cur_patches.size() >=
+  if (features.ground_patches.size() >=
           static_cast<size_t>(node_params_.min_ground_patches_for_map_update) &&
       planar_reg_res.valid) {
     auto patches_in_map =
-        TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar);
+        TransformPatchesToMap(features.ground_patches, R_map_lidar_,
+                              t_map_lidar);
 
     ground_map_frames_.push_back(GroundPatchFrame{patches_in_map, lidar_time});
 
@@ -674,8 +671,9 @@ void GALONode::ProcessCloud(
       sigma_xy, sigma_xy, node_params_.est_cov_.z, node_params_.est_cov_.roll,
       node_params_.est_cov_.pitch, sigma_yaw);
   geometry_msgs::msg::PoseWithCovarianceStamped pose_msg =
-      BuildPoseWithCovarianceMsg(msg->header.stamp, node_params_.gnss_map_frame,
-                                 R_map_base_est, t_map_base_est, sigmas);
+      BuildPoseWithCovarianceMsg(features.cloud.header.stamp,
+                                 node_params_.gnss_map_frame, R_map_base_est,
+                                 t_map_base_est, sigmas);
   lidar_pose_pub_->publish(pose_msg);
 
   auto [roll_abs, pitch_abs, yaw_abs] = EulersFromMatrixSimple(R_map_base_est);

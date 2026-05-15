@@ -1,9 +1,11 @@
 from launch import LaunchDescription
 from launch.actions import LogInfo
-from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
-from launch_ros.substitutions import FindPackageShare
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
+from ament_index_python.packages import get_package_share_directory
+import os
+import yaml
 
 def generate_launch_description():
     # Declare the use_sim_time argument with a default value
@@ -13,12 +15,15 @@ def generate_launch_description():
         description='Use simulation time if true'
     )
 
-    # Path to the main configuration file
-    params_file = PathJoinSubstitution([
-        FindPackageShare("ground_aware_lidar_odometry"),
+    # Path to the main configuration file. Load the parameter dictionary
+    # directly so both galo and galo_deskew receive the same YAML values.
+    params_file = os.path.join(
+        get_package_share_directory("ground_aware_lidar_odometry"),
         "config",
         "galo_params.yaml",
-    ])
+    )
+    with open(params_file, "r") as f:
+        galo_params = yaml.safe_load(f)["galo"]["ros__parameters"]
 
     # Get the value of use_sim_time as a LaunchConfiguration
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -26,21 +31,33 @@ def generate_launch_description():
     # Log the parameter file path (will be resolved at runtime)
     log_info = LogInfo(msg=["Using GALO params file: ", params_file])
 
-    # Node with both the YAML parameters and the use_sim_time override
+    deskew_node = Node(
+        package="ground_aware_lidar_odometry",
+        executable="deskew_node",
+        name="galo_deskew",
+        output="screen",
+        parameters=[
+            galo_params,
+            {"use_sim_time": use_sim_time}
+        ]
+    )
+
+    # Odometry backend consumes /GALO/deskewed_cloud from galo_deskew.
     galo_node = Node(
         package="ground_aware_lidar_odometry",
         executable="node",
         name="galo",
         output="screen",
         parameters=[
-            params_file,                # load everything from YAML
-            {"use_sim_time": use_sim_time}  # override use_sim_time
+            galo_params,
+            {"use_sim_time": use_sim_time}
         ]
     )
 
     return LaunchDescription([
         declare_use_sim_time,
         log_info,
+        deskew_node,
         galo_node,
     ])
 

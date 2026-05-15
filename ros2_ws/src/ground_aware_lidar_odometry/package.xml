@@ -10,6 +10,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
   <depend>std_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>sensor_msgs</depend>
@@ -22,6 +23,7 @@
   <depend>PCL</depend>
   <depend>nav_msgs</depend>
   <depend>qarl_msgs</depend>
+  <depend>common_msgs</depend>
   <depend>robot_localization</depend>
 
   

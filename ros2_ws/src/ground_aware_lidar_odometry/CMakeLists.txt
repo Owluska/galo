@@ -12,12 +12,14 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(robot_localization REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(common_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -42,8 +44,23 @@ add_library(GeographicLib SHARED IMPORTED)
 set_target_properties(GeographicLib PROPERTIES IMPORTED_LOCATION "${GEOGRAPHICLIB_LIBRARY}")
 
 add_executable(node src/node.cpp ${LIB_SOURCES})
+add_library(galo_deskew_component SHARED
+  src/deskew_component.cpp
+  src/library/deskew.cpp
+  src/library/prediction.cpp
+  src/library/utils.cpp
+)
+add_executable(deskew_node src/deskew_node.cpp)
 
 target_include_directories(node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_include_directories(galo_deskew_component PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_include_directories(deskew_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
@@ -51,11 +68,13 @@ target_include_directories(node PUBLIC
 ament_target_dependencies(
   node
   rclcpp
+  rclcpp_components
   std_msgs
   visualization_msgs
   sensor_msgs
   nav_msgs
   geometry_msgs
+  common_msgs
   tf2_ros
   tf2_sensor_msgs
   tf2_geometry_msgs
@@ -64,18 +83,49 @@ ament_target_dependencies(
   robot_localization
 )
 
+ament_target_dependencies(
+  galo_deskew_component
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  geometry_msgs
+  common_msgs
+  tf2_ros
+  qarl_msgs
+  robot_localization
+)
+
+ament_target_dependencies(
+  deskew_node
+  rclcpp
+)
+
 # Plain-signature link libraries – matches ament_target_dependencies style
 target_link_libraries(node
   Eigen3::Eigen
   ${PCL_LIBRARIES}
   GeographicLib
 )
+target_link_libraries(galo_deskew_component
+  Eigen3::Eigen
+)
+target_link_libraries(deskew_node
+  galo_deskew_component
+)
 
 target_compile_definitions(node PUBLIC ${PCL_DEFINITIONS})
+target_compile_definitions(galo_deskew_component PUBLIC ${PCL_DEFINITIONS})
+
+rclcpp_components_register_nodes(
+  galo_deskew_component
+  "ground_aware_lidar_odometry::GaloDeskewComponent"
+)
 
 install(
-  TARGETS node
-  DESTINATION lib/${PROJECT_NAME}
+  TARGETS node deskew_node galo_deskew_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(
   DIRECTORY launch config
