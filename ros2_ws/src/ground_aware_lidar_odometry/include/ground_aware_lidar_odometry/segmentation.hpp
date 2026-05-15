@@ -168,6 +168,7 @@ struct GroundPatch {
   Eigen::Vector3d centroid;
   Eigen::Vector3d normal;
   Eigen::Matrix3d covariance;
+  double time = 0.0;
   double surface_variation = 0.0;
   double weight = 1.0;
   int support = 0;

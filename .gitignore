@@ -4,3 +4,4 @@ ros2_ws/install
 ros2_ws/BAGS/
 ros2_ws/src/rslidar_msg/
 ros2_ws/src/rslidar_sdk/
+*.pyc

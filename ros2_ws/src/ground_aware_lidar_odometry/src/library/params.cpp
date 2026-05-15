@@ -6,10 +6,12 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
   p.debug = DeclareAndGet<int>(node, "node.debug", p.debug);
   p.max_ground_map_frames = DeclareAndGet<int>(
       node, "node.max_ground_map_frames", p.max_ground_map_frames);
-  p.max_ground_map_frames = DeclareAndGet<int>(node, "node.elapsed_time_thresh",
-                                               p.elapsed_time_thresh);
+  p.elapsed_time_thresh = DeclareAndGet<double>(
+      node, "node.elapsed_time_thresh", p.elapsed_time_thresh);
   p.max_planar_map_frames = DeclareAndGet<int>(
       node, "node.max_planar_map_frames", p.max_planar_map_frames);
+  p.map_stale_threshold_ms = DeclareAndGet<double>(
+      node, "node.map_stale_threshold_ms", p.map_stale_threshold_ms);
   p.merge_alpha_xy =
       DeclareAndGet<double>(node, "pose_merge.alpha_xy", p.merge_alpha_xy);
   p.merge_alpha_z =

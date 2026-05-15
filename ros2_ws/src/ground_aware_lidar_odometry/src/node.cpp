@@ -413,6 +413,7 @@ void GALONode::ProcessCloud(
         ground_patches_extractor_.MakeGroundPatchMarkers(deskewed->header);
     ground_patches_pub_->publish(patches_marker);
   }
+  const double lidar_time = rclcpp::Time(deskewed->header.stamp).seconds();
   if (!TryInitializeOdomFromGnss()) {
     RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(),
@@ -420,6 +421,10 @@ void GALONode::ProcessCloud(
         "Waiting for GNSS position/yaw to initialize LiDAR odometry");
     return;
   }
+  PruneStaleMapFrames(lidar_time);
+  RebuildGroundMap();
+  RebuildObjectsMap();
+
   if (ground_map_.empty() || objects_map_.empty()) {
     RCLCPP_WARN(this->get_logger(),
                 "Either objects or ground map is empty %zu %zu",
@@ -427,12 +432,14 @@ void GALONode::ProcessCloud(
 
     auto patches_in_map =
         TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar);
-    ground_map_frames_.push_back(patches_in_map);
-    RebuildGroundMap();
+    ground_map_frames_.push_back(GroundPatchFrame{patches_in_map, lidar_time});
 
     auto planar_points_in_map =
         TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar);
-    objects_map_frames_.push_back(planar_points_in_map);
+    objects_map_frames_.push_back(PlanarMapFrame{planar_points_in_map,
+                                                 lidar_time});
+    PruneStaleMapFrames(lidar_time);
+    RebuildGroundMap();
     RebuildObjectsMap();
     RCLCPP_WARN(
         this->get_logger(),
@@ -456,7 +463,6 @@ void GALONode::ProcessCloud(
     gnss_data_local = gnss_data_;
   }
 
-  double lidar_time = rclcpp::Time(deskewed->header.stamp).seconds();
   std::optional<Eigen::Quaterniond> q_lidar;
   {
     std::lock_guard<std::mutex> lock(mut_);
@@ -631,13 +637,13 @@ void GALONode::ProcessCloud(
   auto planar_points_in_map =
       TransformPointsToMap(cur_planar_points, R_map_lidar_, t_map_lidar);
 
-  objects_map_frames_.push_back(planar_points_in_map);
+  objects_map_frames_.push_back(PlanarMapFrame{planar_points_in_map,
+                                               lidar_time});
 
   while (objects_map_frames_.size() >
          static_cast<size_t>(node_params_.max_planar_map_frames)) {
     objects_map_frames_.pop_front();
   }
-  RebuildObjectsMap();
 
   if (cur_patches.size() >=
           static_cast<size_t>(node_params_.min_ground_patches_for_map_update) &&
@@ -645,14 +651,16 @@ void GALONode::ProcessCloud(
     auto patches_in_map =
         TransformPatchesToMap(cur_patches, R_map_lidar_, t_map_lidar);
 
-    ground_map_frames_.push_back(patches_in_map);
+    ground_map_frames_.push_back(GroundPatchFrame{patches_in_map, lidar_time});
 
     while (ground_map_frames_.size() >
            static_cast<size_t>(node_params_.max_ground_map_frames)) {
       ground_map_frames_.pop_front();
     }
-    RebuildGroundMap();
   }
+  PruneStaleMapFrames(lidar_time);
+  RebuildGroundMap();
+  RebuildObjectsMap();
   // T_map_base_est = T_map_lidar_est * T_lidar_base
   Eigen::Matrix3d R_lidar_body = q_lidar_body.toRotationMatrix();
 
@@ -928,7 +936,8 @@ void GALONode::RebuildGroundMap() {
   ground_map_.clear();
 
   for (const auto& frame : ground_map_frames_) {
-    ground_map_.insert(ground_map_.end(), frame.begin(), frame.end());
+    ground_map_.insert(ground_map_.end(), frame.patches.begin(),
+                       frame.patches.end());
   }
 }
 
@@ -936,7 +945,38 @@ void GALONode::RebuildObjectsMap() {
   objects_map_.clear();
 
   for (const auto& frame : objects_map_frames_) {
-    objects_map_.insert(objects_map_.end(), frame.begin(), frame.end());
+    objects_map_.insert(objects_map_.end(), frame.points.begin(),
+                        frame.points.end());
+  }
+}
+
+void GALONode::PruneStaleMapFrames(double current_time) {
+  const double max_age_sec = node_params_.map_stale_threshold_ms * 1e-3;
+  if (max_age_sec <= 0.0) return;
+
+  size_t pruned_ground_frames = 0;
+  while (!ground_map_frames_.empty() &&
+         current_time - ground_map_frames_.front().time > max_age_sec) {
+    ground_map_frames_.pop_front();
+    ++pruned_ground_frames;
+  }
+
+  size_t pruned_object_frames = 0;
+  while (!objects_map_frames_.empty() &&
+         current_time - objects_map_frames_.front().time > max_age_sec) {
+    objects_map_frames_.pop_front();
+    ++pruned_object_frames;
+  }
+
+  if (pruned_ground_frames > 0 || pruned_object_frames > 0) {
+    RCLCPP_INFO_THROTTLE(
+        this->get_logger(), *this->get_clock(),
+        node_params_.registration_log_throttle,
+        "Pruned stale map frames: ground=%zu objects=%zu "
+        "threshold=%.1f ms remaining_ground=%zu remaining_objects=%zu",
+        pruned_ground_frames, pruned_object_frames,
+        node_params_.map_stale_threshold_ms, ground_map_frames_.size(),
+        objects_map_frames_.size());
   }
 }
 

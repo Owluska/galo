@@ -101,6 +101,7 @@ struct GALONodeParams {
   double pose_dt_min = 1e-3;
   double pose_dt_max = 0.5;
   double elapsed_time_thresh = 50.0;  // ms
+  double map_stale_threshold_ms = 500.0;
   double gnss_correction_period_sec = 120.0;
   std::string imu_frame = "imu";
   std::string lidar_frame = "rslidar";
@@ -136,8 +137,11 @@ struct ImuOrientationStamped {
 };
 struct GroundPatchFrame {
   std::vector<GroundPatch> patches;
-  Eigen::Matrix3d R_map_lidar;
-  Eigen::Vector3d t_map_lidar;
+  double time = 0.0;
+};
+struct PlanarMapFrame {
+  std::vector<Eigen::Vector2d> points;
+  double time = 0.0;
 };
 
 struct GnssData {
@@ -235,8 +239,8 @@ class GALONode : public rclcpp::Node {
   std::vector<TimeMeasurments_t> time_measurments;
   std::vector<GroundPatch> ground_map_;
   std::vector<Eigen::Vector2d> objects_map_;
-  std::deque<std::vector<GroundPatch>> ground_map_frames_;
-  std::deque<std::vector<Eigen::Vector2d>> objects_map_frames_;
+  std::deque<GroundPatchFrame> ground_map_frames_;
+  std::deque<PlanarMapFrame> objects_map_frames_;
 
   GnssData gnss_data_;
   WheelSpeedAngleData wheel_data;
@@ -272,6 +276,7 @@ class GALONode : public rclcpp::Node {
       const Eigen::Vector3d& t);
   void RebuildGroundMap();
   void RebuildObjectsMap();
+  void PruneStaleMapFrames(double current_time);
   geometry_msgs::msg::PoseWithCovarianceStamped BuildPoseWithCovarianceMsg(
       const builtin_interfaces::msg::Time& time, const std::string& frame,
       const Eigen::Matrix3d& R, const Eigen::Vector3d& t,

@@ -199,6 +199,7 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
   size_t n = static_cast<size_t>(cloud.width);
   n *= static_cast<size_t>(cloud.height);
   if (n == 0 || labels.size() != n) return valid_patches_;
+  const double patch_time = rclcpp::Time(cloud.header.stamp).seconds();
 
   sensor_msgs::PointCloud2ConstIterator<float> x_it(cloud, "x");
   sensor_msgs::PointCloud2ConstIterator<float> y_it(cloud, "y");
@@ -266,6 +267,7 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     patch.centroid = centroid;
     patch.normal = normal;
     patch.covariance = cov;
+    patch.time = patch_time;
     patch.support = N;
     patch.weight = static_cast<double>(N);
     patch.surface_variation = surface_variation;
