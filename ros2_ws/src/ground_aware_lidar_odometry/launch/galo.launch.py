@@ -16,7 +16,7 @@ def generate_launch_description():
     )
 
     # Path to the main configuration file. Load the parameter dictionary
-    # directly so both galo and galo_deskew receive the same YAML values.
+    # directly so all GALO nodes receive the same YAML values.
     params_file = os.path.join(
         get_package_share_directory("ground_aware_lidar_odometry"),
         "config",
@@ -42,7 +42,18 @@ def generate_launch_description():
         ]
     )
 
-    # Odometry backend consumes /GALO/deskewed_cloud from galo_deskew.
+    frontend_node = Node(
+        package="ground_aware_lidar_odometry",
+        executable="frontend_node",
+        name="galo_frontend",
+        output="screen",
+        parameters=[
+            galo_params,
+            {"use_sim_time": use_sim_time}
+        ]
+    )
+
+    # Odometry backend consumes /GALO/frame_features from galo_frontend.
     galo_node = Node(
         package="ground_aware_lidar_odometry",
         executable="node",
@@ -58,6 +69,7 @@ def generate_launch_description():
         declare_use_sim_time,
         log_info,
         deskew_node,
+        frontend_node,
         galo_node,
     ])
 

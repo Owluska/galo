@@ -1,7 +1,7 @@
 #include "ground_aware_lidar_odometry/node.hpp"
 
-GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
-  GALONodeParams p;
+GaloOdometryParams GaloOdometryComponent::LoadNodeParams(rclcpp::Node& node) {
+  GaloOdometryParams p;
 
   p.debug = DeclareAndGet<int>(node, "node.debug", p.debug);
   p.max_ground_map_frames = DeclareAndGet<int>(
@@ -75,6 +75,8 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
                                                    p.wheel_angle_topic);
   p.deskewed_cloud_topic = DeclareAndGet<std::string>(
       node, "topics.deskewed_cloud", p.deskewed_cloud_topic);
+  p.frame_features_topic = DeclareAndGet<std::string>(
+      node, "topics.frame_features", p.frame_features_topic);
   p.colored_cloud_topic = DeclareAndGet<std::string>(
       node, "topics.colored_cloud", p.colored_cloud_topic);
   p.ground_patches_topic = DeclareAndGet<std::string>(
@@ -139,99 +141,7 @@ GALONodeParams GALONode::LoadNodeParams(rclcpp::Node& node) {
   return p;
 }
 
-DeskewParams GALONode::LoadDeskewParams(rclcpp::Node& node) {
-  DeskewParams p;
-
-  p.imu_queue_size =
-      DeclareAndGet<int>(node, "deskew.imu_queue_size", p.imu_queue_size);
-  p.lidar_queue_size =
-      DeclareAndGet<int>(node, "deskew.lidar_queue_size", p.lidar_queue_size);
-  p.speed_queue_size =
-      DeclareAndGet<int>(node, "deskew.speed_queue_size", p.speed_queue_size);
-  p.scan_period_ =
-      DeclareAndGet<double>(node, "deskew.scan_period", p.scan_period_);
-  p.stamp_is_scan_end_ = DeclareAndGet<bool>(node, "deskew.stamp_is_scan_end",
-                                             p.stamp_is_scan_end_);
-  p.log_throttle =
-      DeclareAndGet<int>(node, "deskew.log_throttle", p.log_throttle);
-  p.debug = DeclareAndGet<int>(node, "deskew.debug", p.debug);
-  p.min_time_epsilon = DeclareAndGet<double>(node, "deskew.min_time_epsilon",
-                                             p.min_time_epsilon);
-  p.relative_time_tolerance = DeclareAndGet<double>(
-      node, "deskew.relative_time_tolerance", p.relative_time_tolerance);
-  p.azimuth_range_epsilon = DeclareAndGet<double>(
-      node, "deskew.azimuth_range_epsilon", p.azimuth_range_epsilon);
-
-  return p;
-}
-
-GroundSegmentationParams GALONode::LoadGroundSegmentationParams(
-    rclcpp::Node& node) {
-  GroundSegmentationParams p;
-
-  p.cell_size =
-      DeclareAndGet<double>(node, "ground_segmentation.cell_size", p.cell_size);
-  p.min_range =
-      DeclareAndGet<double>(node, "ground_segmentation.min_range", p.min_range);
-  p.max_range =
-      DeclareAndGet<double>(node, "ground_segmentation.max_range", p.max_range);
-  p.ground_height_threshold =
-      DeclareAndGet<double>(node, "ground_segmentation.ground_height_threshold",
-                            p.ground_height_threshold);
-  p.min_points_per_cell = DeclareAndGet<int>(
-      node, "ground_segmentation.min_points_per_cell", p.min_points_per_cell);
-  p.neighbor_radius = DeclareAndGet<int>(
-      node, "ground_segmentation.neighbor_radius", p.neighbor_radius);
-  p.min_neighbor_cells = DeclareAndGet<int>(
-      node, "ground_segmentation.min_neighbor_cells", p.min_neighbor_cells);
-  p.ground_z_quantile = DeclareAndGet<double>(
-      node, "ground_segmentation.ground_z_quantile", p.ground_z_quantile);
-  p.grid_reserve = DeclareAndGet<int>(node, "ground_segmentation.grid_reserve",
-                                      p.grid_reserve);
-  p.smoothed_grid_reserve =
-      DeclareAndGet<int>(node, "ground_segmentation.smoothed_grid_reserve",
-                         p.smoothed_grid_reserve);
-  return p;
-}
-
-GroundPatchParams GALONode::LoadGroundPatchParams(rclcpp::Node& node) {
-  GroundPatchParams p;
-
-  p.cell_size =
-      DeclareAndGet<double>(node, "ground_patch.cell_size", p.cell_size);
-  p.min_points =
-      DeclareAndGet<int>(node, "ground_patch.min_points", p.min_points);
-  p.max_thickness = DeclareAndGet<double>(node, "ground_patch.max_thickness",
-                                          p.max_thickness);
-  p.min_normal_z =
-      DeclareAndGet<double>(node, "ground_patch.min_normal_z", p.min_normal_z);
-  p.max_surface_variation = DeclareAndGet<double>(
-      node, "ground_patch.max_surface_variation", p.max_surface_variation);
-  p.patch_reserve =
-      DeclareAndGet<int>(node, "ground_patch.patch_reserve", p.patch_reserve);
-  p.valid_patch_reserve = DeclareAndGet<int>(
-      node, "ground_patch.valid_patch_reserve", p.valid_patch_reserve);
-  p.marker_normal_scale = DeclareAndGet<double>(
-      node, "ground_patch.marker_normal_scale", p.marker_normal_scale);
-  p.marker_shaft_diameter = DeclareAndGet<double>(
-      node, "ground_patch.marker_shaft_diameter", p.marker_shaft_diameter);
-  p.marker_head_diameter = DeclareAndGet<double>(
-      node, "ground_patch.marker_head_diameter", p.marker_head_diameter);
-  p.marker_head_length = DeclareAndGet<double>(
-      node, "ground_patch.marker_head_length", p.marker_head_length);
-  p.marker_lifetime = DeclareAndGet<double>(
-      node, "ground_patch.marker_lifetime", p.marker_lifetime);
-  p.cell_marker_z_offset = DeclareAndGet<double>(
-      node, "ground_patch.cell_marker_z_offset", p.cell_marker_z_offset);
-  p.cell_marker_height = DeclareAndGet<double>(
-      node, "ground_patch.cell_marker_height", p.cell_marker_height);
-  p.cell_marker_alpha = DeclareAndGet<double>(
-      node, "ground_patch.cell_marker_alpha", p.cell_marker_alpha);
-
-  return p;
-}
-
-GroundRegistrationParams GALONode::LoadGroundRegistrationParams(
+GroundRegistrationParams GaloOdometryComponent::LoadGroundRegistrationParams(
     rclcpp::Node& node) {
   GroundRegistrationParams p;
 
@@ -294,7 +204,7 @@ GroundRegistrationParams GALONode::LoadGroundRegistrationParams(
   return p;
 }
 
-PlanarRegistrationParams GALONode::LoadPlanarRegistrationParams(
+PlanarRegistrationParams GaloOdometryComponent::LoadPlanarRegistrationParams(
     rclcpp::Node& node) {
   PlanarRegistrationParams p;
 
@@ -334,7 +244,7 @@ PlanarRegistrationParams GALONode::LoadPlanarRegistrationParams(
   return p;
 }
 
-PredictionParams GALONode::LoadPredictionParams(rclcpp::Node& node) {
+PredictionParams GaloOdometryComponent::LoadPredictionParams(rclcpp::Node& node) {
   PredictionParams p;
 
   p.rear_track_ =
@@ -361,7 +271,7 @@ PredictionParams GALONode::LoadPredictionParams(rclcpp::Node& node) {
   return p;
 }
 
-GnssLocalizationParams GALONode::LoadGnssParams(rclcpp::Node& node) {
+GnssLocalizationParams GaloOdometryComponent::LoadGnssParams(rclcpp::Node& node) {
   GnssLocalizationParams p;
 
   p.base_lat =
@@ -373,7 +283,7 @@ GnssLocalizationParams GALONode::LoadGnssParams(rclcpp::Node& node) {
   return p;
 }
 
-GroundRegistrationGatePrms GALONode::LoadGroundGateParams(rclcpp::Node& node) {
+GroundRegistrationGatePrms GaloOdometryComponent::LoadGroundGateParams(rclcpp::Node& node) {
   GroundRegistrationGatePrms p;
 
   p.max_dpitch = DeclareAndGet<double>(

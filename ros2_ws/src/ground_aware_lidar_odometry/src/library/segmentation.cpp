@@ -96,12 +96,10 @@ SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
     CellKey key{ix, iy};
     auto gz_it = smoothed_ground_z_.find(key);
     if (gz_it == smoothed_ground_z_.end()) {
-      res.labels[idx] = PointLabels::UNKNOWN;
       continue;
     }
     double ground_z = gz_it->second;
     if (std::isnan(ground_z)) {
-      res.labels[idx] = PointLabels::UNKNOWN;
       continue;
     }
     double dz = z - ground_z;

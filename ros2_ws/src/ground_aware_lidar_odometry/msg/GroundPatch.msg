@@ -1,0 +1,9 @@
+geometry_msgs/Point centroid
+geometry_msgs/Vector3 normal
+float64[9] covariance
+float64 time
+float64 surface_variation
+float64 weight
+int32 support
+int32 cell_x
+int32 cell_y
