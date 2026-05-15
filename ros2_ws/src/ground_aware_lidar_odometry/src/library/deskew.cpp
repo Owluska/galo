@@ -83,38 +83,76 @@ DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
   if (imu_queue_.Size() < 2 || lidar_queue_.Size() < 1) {
     return {};
   }
-  // RCLCPP_WARN(logger_, "29 %d ", lidar_queue_.Size());
-  sensor_msgs::msg::PointCloud2 out = *lidar_queue_.PeerFront();
-  UnwrapAzimuthParams(out);
+  sensor_msgs::msg::PointCloud2 out;
+  size_t n = 0;
+  double scan_time = 0;
+  double scan_start_time = 0.0;
+  double scan_end_time = 0.0;
+  const double imu_start_time = imu_queue_.PeerFront().time;
+  const double imu_last_time = imu_queue_.PeerBack().time;
+  bool found_cloud = false;
+  while (lidar_queue_.Size() > 0) {
+    const sensor_msgs::msg::PointCloud2& cloud = *lidar_queue_.PeerFront();
+    scan_time = rclcpp::Time(cloud.header.stamp).seconds();
+    scan_start_time = prms_.stamp_is_scan_end_ ? scan_time - prms_.scan_period_
+                                               : scan_time;
+    scan_end_time = prms_.stamp_is_scan_end_ ? scan_time
+                                             : scan_time + prms_.scan_period_;
+    n = static_cast<size_t>(cloud.width) * static_cast<size_t>(cloud.height);
+    if (n == 0) {
+      lidar_queue_.PopFront();
+      RCLCPP_DEBUG(logger_, "Popped empty lidar cloud");
+      continue;
+    }
+
+    UnwrapAzimuthParams(cloud);
+
+    if (scan_end_time > imu_last_time) {
+      RCLCPP_DEBUG(logger_,
+                   "Waiting for future IMU data. last imu=%.6f scan end=%.6f",
+                   imu_last_time, scan_end_time);
+      return {};
+    }
+
+    if (scan_start_time < imu_start_time) {
+      lidar_queue_.PopFront();
+      RCLCPP_DEBUG(logger_,
+                   "Popped stale lidar data. first imu=%.6f scan start=%.6f",
+                   imu_start_time, scan_start_time);
+      continue;
+    }
+
+    out = cloud;
+    found_cloud = true;
+    break;
+  }
+
+  if (!found_cloud) {
+    return {};
+  }
+
   // double az_span = azs_.max_az - azs_.min_az;
   if (azs_.GetRange() <= prms_.azimuth_range_epsilon) {
+    lidar_queue_.PopFront();
     RCLCPP_WARN(logger_, "Invalid azimuth span, skipping deskew");
     return {};
   }
-  rclcpp::Time msg_time(out.header.stamp);
-  double scan_time = msg_time.seconds();
-  const size_t n =
-      static_cast<size_t>(out.width) * static_cast<size_t>(out.height);
-  double last_point_time =
-      PointTimeFromIndex(azs_.GetRelativeTime(n - 1), scan_time);
-  if (imu_queue_.PeerBack().time < last_point_time) {
-    RCLCPP_DEBUG(logger_,
-                 "Waiting for future IMU data. last imu=%.6f last point=%.6f",
-                 imu_queue_.PeerBack().time, last_point_time);
-    return {};
-  }
+
   if (speed_queue_.Size() < 1) {
     RCLCPP_DEBUG(logger_, "Waiting for speed data");
     return {};
   }
 
-  if (speed_queue_.PeerBack().time < last_point_time) {
+  if (speed_queue_.PeerBack().time < scan_end_time) {
     RCLCPP_DEBUG(
         logger_,
-        "Waiting for future speed data. last speed=%.6f last point=%.6f",
-        speed_queue_.PeerBack().time, last_point_time);
+        "Waiting for future speed data. last speed=%.6f scan end=%.6f",
+        speed_queue_.PeerBack().time, scan_end_time);
     return {};
   }
+
+  lidar_queue_.PopFront();
+
   sensor_msgs::PointCloud2Iterator<float> x_it(out, "x");
   sensor_msgs::PointCloud2Iterator<float> y_it(out, "y");
 
@@ -199,6 +237,5 @@ DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
           point_time, signed_dt, alpha, rate, dyaw);
     }
   }
-  lidar_queue_.PopFront();
   return out;
 }

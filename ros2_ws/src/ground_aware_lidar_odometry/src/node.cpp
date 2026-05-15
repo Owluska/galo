@@ -1,8 +1,7 @@
 #include "ground_aware_lidar_odometry/node.hpp"
 
-#include "rclcpp_components/register_node_macro.hpp"
-
 #include "ground_aware_lidar_odometry/feature_conversions.hpp"
+#include "rclcpp_components/register_node_macro.hpp"
 
 GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
     : Node("galo", options),
@@ -44,7 +43,8 @@ GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
   features_sub_ = this->create_subscription<
       ground_aware_lidar_odometry::msg::FrameFeatures>(
       node_params_.frame_features_topic, 10,
-      std::bind(&GaloOdometryComponent::FrameFeaturesCb, this, std::placeholders::_1),
+      std::bind(&GaloOdometryComponent::FrameFeaturesCb, this,
+                std::placeholders::_1),
       lidar_sub_options);
 
   imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
@@ -58,19 +58,23 @@ GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
   gnss_orientation_sub_ =
       this->create_subscription<qarl_msgs::msg::OrientationStamped>(
           node_params_.gnss_orientation_topic, 1,
-          std::bind(&GaloOdometryComponent::GnssYawCb, this, std::placeholders::_1),
+          std::bind(&GaloOdometryComponent::GnssYawCb, this,
+                    std::placeholders::_1),
           other_sub_options);
   pure_state_sub_ = this->create_subscription<common_msgs::msg::PureState>(
       node_params_.pure_state_topic, 1,
-      std::bind(&GaloOdometryComponent::PureStateCb, this, std::placeholders::_1),
+      std::bind(&GaloOdometryComponent::PureStateCb, this,
+                std::placeholders::_1),
       other_sub_options);
   wheel_speed_sub_ = this->create_subscription<common_msgs::msg::WheelSpeed>(
       node_params_.wheel_speed_topic, 1,
-      std::bind(&GaloOdometryComponent::WheelSpeedCb, this, std::placeholders::_1),
+      std::bind(&GaloOdometryComponent::WheelSpeedCb, this,
+                std::placeholders::_1),
       other_sub_options);
   wa_sub_ = this->create_subscription<qarl_msgs::msg::WAngleFeedback>(
       node_params_.wheel_angle_topic, 1,
-      std::bind(&GaloOdometryComponent::WheelAngleCb, this, std::placeholders::_1),
+      std::bind(&GaloOdometryComponent::WheelAngleCb, this,
+                std::placeholders::_1),
       other_sub_options);
   translation_pub_ = this->create_publisher<geometry_msgs::msg::Point>(
       node_params_.translation_topic, 1);
@@ -95,7 +99,8 @@ GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
             std::chrono::duration<double>(
                 node_params_.gnss_correction_period_sec));
     gnss_correction_timer_ = this->create_wall_timer(
-        correction_period, std::bind(&GaloOdometryComponent::GnssCorrectionTimerCb, this),
+        correction_period,
+        std::bind(&GaloOdometryComponent::GnssCorrectionTimerCb, this),
         lidar_callback_group_);
     RCLCPP_INFO(this->get_logger(),
                 "GNSS LiDAR odometry correction timer period: %.3f s",
@@ -110,7 +115,8 @@ void GaloOdometryComponent::WheelAngleCb(
   WheelSpeedAngleData speed_data;
 }
 
-void GaloOdometryComponent::WheelSpeedCb(const common_msgs::msg::WheelSpeed::SharedPtr msg) {
+void GaloOdometryComponent::WheelSpeedCb(
+    const common_msgs::msg::WheelSpeed::SharedPtr msg) {
   std::lock_guard<std::mutex> lock(mut_);
   wheel_data.wheel_angle = last_wa_;
   wheel_data.left_speed = msg->rear_left;
@@ -122,7 +128,8 @@ void GaloOdometryComponent::WheelSpeedCb(const common_msgs::msg::WheelSpeed::Sha
   (void)speed_res;
 }
 
-void GaloOdometryComponent::PureStateCb(const common_msgs::msg::PureState::SharedPtr msg) {
+void GaloOdometryComponent::PureStateCb(
+    const common_msgs::msg::PureState::SharedPtr msg) {
   Eigen::Quaterniond q =
       Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x,
                          msg->pose.orientation.y, msg->pose.orientation.z);
@@ -146,7 +153,8 @@ void GaloOdometryComponent::GnssCorrectionTimerCb() {
   }
 }
 
-void GaloOdometryComponent::GnssCb(const qarl_msgs::msg::NmeaGGA::SharedPtr msg) {
+void GaloOdometryComponent::GnssCb(
+    const qarl_msgs::msg::NmeaGGA::SharedPtr msg) {
   // Only use high-quality GNSS fixes.
   // gps_qual >= 4 usually means RTK fixed / high-confidence solution.
   if (msg->gps_qual < node_params_.min_gnss_quality) {
@@ -351,7 +359,8 @@ void GaloOdometryComponent::ProcessFrameFeatures(
   EstimatePoseFromFeatures(ground_aware_lidar_odometry::FromMsg(*msg));
 }
 
-void GaloOdometryComponent::EstimatePoseFromFeatures(const FrameFeatures& features) {
+void GaloOdometryComponent::EstimatePoseFromFeatures(
+    const FrameFeatures& features) {
   const double lidar_time = features.lidar_time;
   if (!TryInitializeOdomFromGnss()) {
     RCLCPP_WARN_THROTTLE(
@@ -369,16 +378,14 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(const FrameFeatures& featur
                 "Either objects or ground map is empty %zu %zu",
                 ground_map_.size(), objects_map_.size());
 
-    auto patches_in_map =
-        TransformPatchesToMap(features.ground_patches, R_map_lidar_,
-                              t_map_lidar);
+    auto patches_in_map = TransformPatchesToMap(features.ground_patches,
+                                                R_map_lidar_, t_map_lidar);
     ground_map_frames_.push_back(GroundPatchFrame{patches_in_map, lidar_time});
 
     auto planar_points_in_map =
-        TransformPointsToMap(features.planar_points, R_map_lidar_,
-                             t_map_lidar);
-    objects_map_frames_.push_back(PlanarMapFrame{planar_points_in_map,
-                                                 lidar_time});
+        TransformPointsToMap(features.planar_points, R_map_lidar_, t_map_lidar);
+    objects_map_frames_.push_back(
+        PlanarMapFrame{planar_points_in_map, lidar_time});
     PruneStaleMapFrames(lidar_time);
     RebuildGroundMap();
     RebuildObjectsMap();
@@ -470,9 +477,9 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(const FrameFeatures& featur
 
     Eigen::Vector2d t_planar_initial(pred.t.x(), pred.t.y());
     TimeMeasurments_t meas("planar_registration");
-    planar_reg_res = planar_registration_.Align(
-        objects_map_, features.planar_points, R_planar_initial,
-        t_planar_initial);
+    planar_reg_res =
+        planar_registration_.Align(objects_map_, features.planar_points,
+                                   R_planar_initial, t_planar_initial);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
@@ -506,10 +513,9 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(const FrameFeatures& featur
         Eigen::AngleAxisd(roll_imu, Eigen::Vector3d::UnitX())
             .toRotationMatrix();
     TimeMeasurments_t meas("ground_registration");
-    ground_reg_result =
-        ground_registration_.Align(ground_map_, features.ground_patches,
-                                   R_imu_prior_map, R_ground_initial,
-                                   t_ground_initial);
+    ground_reg_result = ground_registration_.Align(
+        ground_map_, features.ground_patches, R_imu_prior_map, R_ground_initial,
+        t_ground_initial);
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
@@ -580,8 +586,8 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(const FrameFeatures& featur
   auto planar_points_in_map =
       TransformPointsToMap(features.planar_points, R_map_lidar_, t_map_lidar);
 
-  objects_map_frames_.push_back(PlanarMapFrame{planar_points_in_map,
-                                               lidar_time});
+  objects_map_frames_.push_back(
+      PlanarMapFrame{planar_points_in_map, lidar_time});
 
   while (objects_map_frames_.size() >
          static_cast<size_t>(node_params_.max_planar_map_frames)) {
@@ -591,9 +597,8 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(const FrameFeatures& featur
   if (features.ground_patches.size() >=
           static_cast<size_t>(node_params_.min_ground_patches_for_map_update) &&
       planar_reg_res.valid) {
-    auto patches_in_map =
-        TransformPatchesToMap(features.ground_patches, R_map_lidar_,
-                              t_map_lidar);
+    auto patches_in_map = TransformPatchesToMap(features.ground_patches,
+                                                R_map_lidar_, t_map_lidar);
 
     ground_map_frames_.push_back(GroundPatchFrame{patches_in_map, lidar_time});
 
@@ -632,9 +637,10 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(const FrameFeatures& featur
 }
 
 bool GaloOdometryComponent::GetTransformation(tf2_ros::Buffer& tf_buffer,
-                                 const std::string& target_frame,
-                                 const std::string& source_frame,
-                                 Eigen::Quaterniond& q, Eigen::Vector3d& t) {
+                                              const std::string& target_frame,
+                                              const std::string& source_frame,
+                                              Eigen::Quaterniond& q,
+                                              Eigen::Vector3d& t) {
   try {
     geometry_msgs::msg::TransformStamped tf_msg = tf_buffer.lookupTransform(
         target_frame, source_frame, tf2::TimePointZero);
@@ -655,9 +661,9 @@ bool GaloOdometryComponent::GetTransformation(tf2_ros::Buffer& tf_buffer,
 }
 
 bool GaloOdometryComponent::GetOrientation(tf2_ros::Buffer& tf_buffer,
-                              const std::string& target_frame,
-                              const std::string& source_frame,
-                              Eigen::Quaterniond& q) {
+                                           const std::string& target_frame,
+                                           const std::string& source_frame,
+                                           Eigen::Quaterniond& q) {
   try {
     geometry_msgs::msg::TransformStamped tf_msg = tf_buffer.lookupTransform(
         target_frame, source_frame, tf2::TimePointZero);
@@ -674,9 +680,9 @@ bool GaloOdometryComponent::GetOrientation(tf2_ros::Buffer& tf_buffer,
 }
 
 bool GaloOdometryComponent::GetTranslation(tf2_ros::Buffer& tf_buffer,
-                              const std::string& target_frame,
-                              const std::string& source_frame,
-                              Eigen::Vector3d& t) {
+                                           const std::string& target_frame,
+                                           const std::string& source_frame,
+                                           Eigen::Vector3d& t) {
   try {
     geometry_msgs::msg::TransformStamped tf_msg = tf_buffer.lookupTransform(
         target_frame, source_frame, tf2::TimePointZero);
@@ -692,8 +698,8 @@ bool GaloOdometryComponent::GetTranslation(tf2_ros::Buffer& tf_buffer,
 }
 
 bool GaloOdometryComponent::GetExtrinsicTf(tf2_ros::Buffer& tf_buffer,
-                              const std::string& imu_frame,
-                              const std::string& lidar_frame) {
+                                           const std::string& imu_frame,
+                                           const std::string& lidar_frame) {
   std::lock_guard<std::mutex> lock(mut_);
   if (has_imu_lidar_extrinsic_) return has_imu_lidar_extrinsic_;
 
@@ -739,12 +745,11 @@ bool GaloOdometryComponent::TryInitializeOdomFromGnss(bool force_correction) {
     const double yaw_age = now - gnss_data_.yaw_time;
     if (position_age < 0.0 || position_age > kMaxGnssDataAgeSec ||
         yaw_age < 0.0 || yaw_age > kMaxGnssDataAgeSec) {
-      RCLCPP_WARN_THROTTLE(
-          this->get_logger(), *this->get_clock(),
-          node_params_.initialization_log_throttle,
-          "GNSS data is stale for LiDAR odometry correction: "
-          "position_age=%.3f s yaw_age=%.3f s",
-          position_age, yaw_age);
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(),
+                           node_params_.initialization_log_throttle,
+                           "GNSS data is stale for LiDAR odometry correction: "
+                           "position_age=%.3f s yaw_age=%.3f s",
+                           position_age, yaw_age);
       return false;
     }
 
@@ -795,7 +800,7 @@ void GaloOdometryComponent::PrintTimeMeasurments(
       break;
     }
   }
-  if (!node_params_.debug && has_big_meas) return;
+  if (!node_params_.debug && !has_big_meas) return;
   std::stringstream ss;
   ss << "Time measurments (ms): ";
 
@@ -959,11 +964,10 @@ Eigen::Vector3d GaloOdometryComponent::MergeGroundAndPlanarTranslation(
 }
 
 geometry_msgs::msg::PoseWithCovarianceStamped
-GaloOdometryComponent::BuildPoseWithCovarianceMsg(const builtin_interfaces::msg::Time& time,
-                                     const std::string& frame,
-                                     const Eigen::Matrix3d& R,
-                                     const Eigen::Vector3d& t,
-                                     const Eigen::Vector<double, 6>& sigmas) {
+GaloOdometryComponent::BuildPoseWithCovarianceMsg(
+    const builtin_interfaces::msg::Time& time, const std::string& frame,
+    const Eigen::Matrix3d& R, const Eigen::Vector3d& t,
+    const Eigen::Vector<double, 6>& sigmas) {
   geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
   pose_msg.header.stamp = time;
   pose_msg.header.frame_id = frame;
@@ -993,7 +997,8 @@ GaloOdometryComponent::BuildPoseWithCovarianceMsg(const builtin_interfaces::msg:
   return pose_msg;
 }
 
-bool GaloOdometryComponent::CheckGroundRegistration(const GroundRegistrationResult& res) {
+bool GaloOdometryComponent::CheckGroundRegistration(
+    const GroundRegistrationResult& res) {
   if (!res.valid || res.num_matches < ground_reg_gate_params_.min_matches ||
       res.mean_abs_residual > ground_reg_gate_params_.max_residual) {
     return false;
