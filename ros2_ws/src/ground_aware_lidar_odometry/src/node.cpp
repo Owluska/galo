@@ -42,7 +42,7 @@ GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
   RCLCPP_INFO(this->get_logger(), "Loaded GALO parameters from ROS params");
   features_sub_ = this->create_subscription<
       ground_aware_lidar_odometry::msg::FrameFeatures>(
-      node_params_.frame_features_topic, 10,
+      node_params_.frame_features_topic, 1,
       std::bind(&GaloOdometryComponent::FrameFeaturesCb, this,
                 std::placeholders::_1),
       lidar_sub_options);
@@ -623,7 +623,7 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
       sigma_xy, sigma_xy, node_params_.est_cov_.z, node_params_.est_cov_.roll,
       node_params_.est_cov_.pitch, sigma_yaw);
   geometry_msgs::msg::PoseWithCovarianceStamped pose_msg =
-      BuildPoseWithCovarianceMsg(features.cloud.header.stamp,
+      BuildPoseWithCovarianceMsg(features.header.stamp,
                                  node_params_.gnss_map_frame, R_map_base_est,
                                  t_map_base_est, sigmas);
   lidar_pose_pub_->publish(pose_msg);

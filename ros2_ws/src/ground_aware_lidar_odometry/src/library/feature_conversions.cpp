@@ -4,8 +4,7 @@ namespace ground_aware_lidar_odometry {
 
 msg::FrameFeatures ToMsg(const ::FrameFeatures& features) {
   msg::FrameFeatures msg;
-  msg.header = features.cloud.header;
-  msg.cloud = features.cloud;
+  msg.header = features.header;
 
   msg.planar_points.reserve(features.planar_points.size());
   for (const auto& point : features.planar_points) {
@@ -44,7 +43,7 @@ msg::FrameFeatures ToMsg(const ::FrameFeatures& features) {
 
 ::FrameFeatures FromMsg(const msg::FrameFeatures& msg) {
   ::FrameFeatures features;
-  features.cloud = msg.cloud;
+  features.header = msg.header;
   features.lidar_time = rclcpp::Time(msg.header.stamp).seconds();
 
   features.planar_points.reserve(msg.planar_points.size());

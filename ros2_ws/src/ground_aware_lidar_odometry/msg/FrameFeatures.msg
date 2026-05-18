@@ -1,4 +1,3 @@
 std_msgs/Header header
-sensor_msgs/PointCloud2 cloud
 ground_aware_lidar_odometry/Point2D[] planar_points
 ground_aware_lidar_odometry/GroundPatch[] ground_patches

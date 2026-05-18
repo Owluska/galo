@@ -117,11 +117,11 @@ struct GridCell {
       return;
     }
 
-    std::sort(zs.begin(), zs.end());
-
     quantile = std::clamp(quantile, 0.0, 1.0);
     size_t k = static_cast<size_t>(quantile * static_cast<double>(zs.size()));
     k = std::min(k, zs.size() - 1);
+    std::nth_element(zs.begin(), zs.begin() + static_cast<std::ptrdiff_t>(k),
+                     zs.end());
     min_z = zs[k];
 
     // size_t m = static_cast<size_t>(0.80 * static_cast<double>(zs.size()));
@@ -134,18 +134,15 @@ struct PatchCell {
   int count = 0;
   Eigen::Vector3d sum = Eigen::Vector3d::Zero();
   Eigen::Matrix3d sum_outer = Eigen::Matrix3d::Zero();
-  std::vector<double> zs;
   void AddPoint(const Eigen::Vector3d& p) {
     ++count;
     sum += p;
     sum_outer += p * p.transpose();
-    zs.push_back(p.z());
   }
 };
 
 struct SegmentationResult {
   std::vector<PointLabels> labels;
-  CloudMsg msg;
 };
 
 struct GroundRegistrationResult {
@@ -185,17 +182,21 @@ class Segmentation {
   Segmentation(const GroundSegmentationParams& params) : params_(params) {
     grid_.reserve(params_.grid_reserve);
     smoothed_ground_z_.reserve(params_.smoothed_grid_reserve);
+    neighbor_ground_zs_.reserve(
+        static_cast<size_t>((2 * std::max(1, params_.neighbor_radius) + 1) *
+                            (2 * std::max(1, params_.neighbor_radius) + 1)));
   }
 
   SegmentationResult Classify(const CloudMsg& msg);
 
   sensor_msgs::msg::PointCloud2 MakeColoredCloud(
-      const SegmentationResult& result) const;
+      const CloudMsg& cloud, const SegmentationResult& result) const;
 
  private:
   GroundSegmentationParams params_;
   std::unordered_map<CellKey, GridCell, CellKeyHash> grid_;
   std::unordered_map<CellKey, double, CellKeyHash> smoothed_ground_z_;
+  mutable std::vector<double> neighbor_ground_zs_;
 
   std::pair<int, int> GetIndexes(float x, float y) const;
 
@@ -257,13 +258,17 @@ class PlanarRegistration {
  public:
   PlanarRegistration(const PlanarRegistrationParams params,
                      const rclcpp::Logger& logger, const rclcpp::Clock& clock)
-      : params_(params), logger_(logger), clock_(clock) {}
+      : params_(params), logger_(logger), clock_(clock) {
+    extraction_grid_.reserve(static_cast<size_t>(params_.grid_reserve));
+  }
 
   PlanarRegistrationResult Align(const std::vector<Eigen::Vector2d>& map,
                                  const std::vector<Eigen::Vector2d>& current,
                                  const Eigen::Matrix2d& R_initial,
                                  const Eigen::Vector2d& t_initial);
   std::vector<Eigen::Vector2d> ExtractPoints(
+      const CloudMsg& cloud, const std::vector<PointLabels>& labels) const;
+  std::vector<Eigen::Vector2d> ExtractFilteredPoints(
       const CloudMsg& cloud, const std::vector<PointLabels>& labels) const;
 
   std::vector<Eigen::Vector2d> Filter(
@@ -273,4 +278,5 @@ class PlanarRegistration {
   PlanarRegistrationParams params_;
   rclcpp::Logger logger_;
   rclcpp::Clock clock_;
+  mutable std::unordered_map<CellKey, Voxel2D, CellKeyHash> extraction_grid_;
 };

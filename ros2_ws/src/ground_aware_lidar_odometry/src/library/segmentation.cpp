@@ -1,4 +1,34 @@
 #include "ground_aware_lidar_odometry/segmentation.hpp"
+
+namespace {
+
+void ResetCellValues(
+    std::unordered_map<CellKey, GridCell, CellKeyHash>& map) {
+  for (auto& [key, cell] : map) {
+    cell.count = 0;
+    cell.min_z = std::numeric_limits<double>::infinity();
+    cell.zs.clear();
+  }
+}
+
+void ResetCellValues(
+    std::unordered_map<CellKey, PatchCell, CellKeyHash>& map) {
+  for (auto& [key, cell] : map) {
+    cell.count = 0;
+    cell.sum.setZero();
+    cell.sum_outer.setZero();
+  }
+}
+
+void ResetCellValues(std::unordered_map<CellKey, Voxel2D, CellKeyHash>& map) {
+  for (auto& [key, cell] : map) {
+    cell.count = 0;
+    cell.sum.setZero();
+  }
+}
+
+}  // namespace
+
 std::pair<int, int> Segmentation::GetIndexes(float x, float y) const {
   int ix = static_cast<int>(std::floor(x / params_.cell_size));
   int iy = static_cast<int>(std::floor(y / params_.cell_size));
@@ -11,7 +41,7 @@ void Segmentation::FillGrid(const CloudMsg& msg) {
   sensor_msgs::PointCloud2ConstIterator<float> x_it(msg, "x");
   sensor_msgs::PointCloud2ConstIterator<float> y_it(msg, "y");
   sensor_msgs::PointCloud2ConstIterator<float> z_it(msg, "z");
-  grid_.clear();
+  ResetCellValues(grid_);
   for (size_t idx = 0; idx < n; ++x_it, ++y_it, ++z_it, ++idx) {
     float x = *x_it;
     float y = *y_it;
@@ -30,6 +60,13 @@ void Segmentation::FillGrid(const CloudMsg& msg) {
     cell.count++;
     cell.zs.push_back(z);
   }
+  for (auto it = grid_.begin(); it != grid_.end();) {
+    if (it->second.count == 0) {
+      it = grid_.erase(it);
+    } else {
+      ++it;
+    }
+  }
   for (auto& [key, cell] : grid_) {
     cell.CellGroundZ(params_.ground_z_quantile);
   }
@@ -43,7 +80,7 @@ void Segmentation::FillSmoothedGrid() {
 }
 
 double Segmentation::GetNeighborGroundZ(const CellKey& key) const {
-  std::vector<double> zs;
+  neighbor_ground_zs_.clear();
   const int radius = std::max(1, params_.neighbor_radius);
   const auto min_neighbor_cells =
       static_cast<size_t>(std::max(0, params_.min_neighbor_cells));
@@ -58,21 +95,24 @@ double Segmentation::GetNeighborGroundZ(const CellKey& key) const {
       const auto& cell = it->second;
       if (cell.count < params_.min_points_per_cell) continue;
 
-      zs.push_back(cell.min_z);
+      neighbor_ground_zs_.push_back(cell.min_z);
     }
   }
 
-  if (zs.size() < min_neighbor_cells) {
+  if (neighbor_ground_zs_.size() < min_neighbor_cells) {
     return std::numeric_limits<double>::quiet_NaN();
   }
 
-  std::sort(zs.begin(), zs.end());
-  return zs[zs.size() / 2];  // median
+  const size_t median_idx = neighbor_ground_zs_.size() / 2;
+  std::nth_element(
+      neighbor_ground_zs_.begin(),
+      neighbor_ground_zs_.begin() + static_cast<std::ptrdiff_t>(median_idx),
+      neighbor_ground_zs_.end());
+  return neighbor_ground_zs_[median_idx];  // median
 }
 
 SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
   SegmentationResult res;
-  res.msg = msg;
   FillGrid(msg);
   FillSmoothedGrid();
   sensor_msgs::msg::PointCloud2 ground, non_ground;
@@ -114,8 +154,8 @@ SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
 }
 
 sensor_msgs::msg::PointCloud2 Segmentation::MakeColoredCloud(
-    const SegmentationResult& result) const {
-  const auto& in = result.msg;
+    const CloudMsg& cloud, const SegmentationResult& result) const {
+  const auto& in = cloud;
 
   sensor_msgs::msg::PointCloud2 out;
   out.header = in.header;
@@ -192,7 +232,7 @@ std::pair<int, int> GroundPatchExtractor::GetIndexes(float x, float y) const {
 
 std::vector<GroundPatch> GroundPatchExtractor::Extract(
     const CloudMsg& cloud, const std::vector<PointLabels>& labels) {
-  patches_.clear();
+  ResetCellValues(patches_);
   valid_patches_.clear();
   size_t n = static_cast<size_t>(cloud.width);
   n *= static_cast<size_t>(cloud.height);
@@ -215,6 +255,14 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     CellKey key{ix, iy};
     PatchCell& cell = patches_[key];
     cell.AddPoint(Eigen::Vector3d(x, y, z));
+  }
+
+  for (auto it = patches_.begin(); it != patches_.end();) {
+    if (it->second.count == 0) {
+      it = patches_.erase(it);
+    } else {
+      ++it;
+    }
   }
 
   for (const auto& [key, patch_cell] : patches_) {
@@ -240,13 +288,6 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     if (normal.z() < 0.0) normal = -normal;
 
     Eigen::Vector3d centroid = mean;
-
-    // Optional, but I would not use 20% here anymore after fixing segmentation.
-    // Use median or mean first.
-    std::vector<double> zs = patch_cell.zs;
-    std::sort(zs.begin(), zs.end());
-
-    centroid.z() = zs[zs.size() / 2];  // safer than z20
 
     double lambda0 = std::max(0.0, eigenvalues(0));
     double lambda1 = std::max(0.0, eigenvalues(1));
@@ -842,6 +883,50 @@ std::vector<Eigen::Vector2d> PlanarRegistration::ExtractPoints(
       points.emplace_back(Eigen::Vector2d(x, y));
     }
   }
+  return points;
+}
+
+std::vector<Eigen::Vector2d> PlanarRegistration::ExtractFilteredPoints(
+    const CloudMsg& cloud, const std::vector<PointLabels>& labels) const {
+  size_t n = static_cast<size_t>(cloud.width);
+  n *= static_cast<size_t>(cloud.height);
+  if (n == 0 || labels.size() != n) return {};
+
+  ResetCellValues(extraction_grid_);
+
+  sensor_msgs::PointCloud2ConstIterator<float> x_it(cloud, "x");
+  sensor_msgs::PointCloud2ConstIterator<float> y_it(cloud, "y");
+
+  for (size_t idx = 0; idx < n; ++x_it, ++y_it, ++idx) {
+    if (labels[idx] != PointLabels::NON_GROUND) continue;
+
+    float x = *x_it;
+    float y = *y_it;
+    if (!IsFinitePoint(x, y)) continue;
+
+    int ix = static_cast<int>(std::floor(x / params_.voxel_size));
+    int iy = static_cast<int>(std::floor(y / params_.voxel_size));
+    auto& v = extraction_grid_[{ix, iy}];
+    v.count++;
+    v.sum += Eigen::Vector2d(x, y);
+  }
+
+  for (auto it = extraction_grid_.begin(); it != extraction_grid_.end();) {
+    if (it->second.count == 0) {
+      it = extraction_grid_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  std::vector<Eigen::Vector2d> points;
+  points.reserve(extraction_grid_.size());
+
+  for (const auto& [key, v] : extraction_grid_) {
+    if (v.count < params_.min_points_per_voxel) continue;
+    points.push_back(v.sum / v.count);
+  }
+
   return points;
 }
 

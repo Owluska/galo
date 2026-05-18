@@ -12,7 +12,7 @@ GaloFrontend::GaloFrontend(
 FrontendResult GaloFrontend::Extract(const CloudMsg& cloud,
                                      bool include_debug_outputs) {
   FrontendResult result;
-  result.features.cloud = cloud;
+  result.features.header = cloud.header;
   result.features.lidar_time = rclcpp::Time(cloud.header.stamp).seconds();
 
   SegmentationResult segmentation_result;
@@ -26,11 +26,8 @@ FrontendResult GaloFrontend::Extract(const CloudMsg& cloud,
   {
     TimeMeasurments_t meas("objects_extraction");
     result.features.planar_points =
-        planar_registration_.ExtractPoints(cloud, segmentation_result.labels);
-    if (!result.features.planar_points.empty()) {
-      result.features.planar_points =
-          planar_registration_.Filter(result.features.planar_points);
-    }
+        planar_registration_.ExtractFilteredPoints(cloud,
+                                                   segmentation_result.labels);
     meas.SetEnd();
     result.measurements.push_back(meas);
   }
@@ -44,7 +41,8 @@ FrontendResult GaloFrontend::Extract(const CloudMsg& cloud,
   }
 
   if (include_debug_outputs) {
-    result.colored_cloud = segmentation_.MakeColoredCloud(segmentation_result);
+    result.colored_cloud =
+        segmentation_.MakeColoredCloud(cloud, segmentation_result);
     result.ground_markers =
         ground_patches_extractor_.MakeGroundPatchMarkers(cloud.header);
   }

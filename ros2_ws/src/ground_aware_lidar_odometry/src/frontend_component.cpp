@@ -33,7 +33,7 @@ GaloFrontendComponent::GaloFrontendComponent(
   options_in.callback_group = callback_group_;
 
   cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      params_.deskewed_cloud_topic, 10,
+      params_.deskewed_cloud_topic, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&GaloFrontendComponent::CloudCb, this, std::placeholders::_1),
       options_in);
   features_pub_ =
@@ -53,8 +53,13 @@ GaloFrontendComponent::GaloFrontendComponent(
 
 void GaloFrontendComponent::CloudCb(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-  const FrontendResult result = frontend_.Extract(*msg, params_.debug);
-  PrintTimeMeasurements(result.measurements);
+  const auto callback_start = std::chrono::steady_clock::now();
+  FrontendResult result = frontend_.Extract(*msg, params_.debug);
+
+  TimeMeasurments_t conversion_meas("feature_msg_conversion");
+  auto features_msg = ToMsg(result.features);
+  conversion_meas.SetEnd();
+  result.measurements.push_back(conversion_meas);
 
   if (result.colored_cloud) {
     colored_pub_->publish(*result.colored_cloud);
@@ -63,7 +68,17 @@ void GaloFrontendComponent::CloudCb(
     ground_patches_pub_->publish(*result.ground_markers);
   }
 
-  features_pub_->publish(ToMsg(result.features));
+  TimeMeasurments_t publish_meas("feature_publish");
+  features_pub_->publish(features_msg);
+  publish_meas.SetEnd();
+  result.measurements.push_back(publish_meas);
+
+  TimeMeasurments_t callback_meas("frontend_callback_total");
+  callback_meas.start = callback_start;
+  callback_meas.SetEnd();
+  result.measurements.push_back(callback_meas);
+
+  PrintTimeMeasurements(result.measurements);
 }
 
 void GaloFrontendComponent::PrintTimeMeasurements(

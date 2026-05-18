@@ -6,7 +6,7 @@
 #include "ground_aware_lidar_odometry/segmentation.hpp"
 
 struct FrameFeatures {
-  CloudMsg cloud;
+  std_msgs::msg::Header header;
   std::vector<Eigen::Vector2d> planar_points;
   std::vector<GroundPatch> ground_patches;
   double lidar_time = 0.0;
