@@ -26,9 +26,13 @@ Eigen::Vector3d GnssLocalConverter::ToLocal(double lon, double lat,
   bool northp_tmp;
   double easting, northing;
   double gamma, k;
+  try {
+    GeographicLib::UTMUPS::Forward(lat, lon, zone_tmp, northp_tmp, easting,
+                                   northing, gamma, k, params_.zone);
+  } catch (const GeographicLib::GeographicErr& ex) {
+    RCLCPP_WARN(logger_, "Simple gnss converter: %s", ex.what());
+  }
 
-  GeographicLib::UTMUPS::Forward(lat, lon, zone_tmp, northp_tmp, easting,
-                                 northing, gamma, k, params_.zone);
   if (zone_tmp != params_.zone) {
     RCLCPP_WARN(logger_, "Base point projected to UTM zone %d, expected %d",
                 zone_tmp, params_.zone);
