@@ -1,4 +1,66 @@
 #include "ground_aware_lidar_odometry/deskew.hpp"
+
+#include <cstring>
+
+namespace {
+
+std::optional<size_t> FieldOffset(const sensor_msgs::msg::PointCloud2& msg,
+                                  const std::string& field_name) {
+  for (const auto& field : msg.fields) {
+    if (field.name == field_name) {
+      return static_cast<size_t>(field.offset);
+    }
+  }
+  return std::nullopt;
+}
+
+template <typename T>
+std::vector<T> CopyQueue(const FiniteDeque<T>& queue) {
+  std::vector<T> out;
+  out.reserve(queue.Size());
+  for (size_t i = 0; i < queue.Size(); ++i) {
+    out.push_back(queue[i]);
+  }
+  return out;
+}
+
+template <typename T>
+size_t FindInterval(const std::vector<T>& samples, double t) {
+  if (samples.size() < 2) return samples.size();
+  size_t lo = 0;
+  size_t hi = samples.size() - 1;
+  while (lo + 1 < hi) {
+    const size_t mid = lo + (hi - lo) / 2;
+    if (samples[mid].time < t) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+double InterpolateSpeed(const std::vector<SpeedStamped>& samples, double t,
+                        double min_time_epsilon) {
+  if (samples.empty()) return 0.0;
+  if (t <= samples.front().time) return samples.front().speed;
+  if (t >= samples.back().time) return samples.back().speed;
+
+  const size_t i = FindInterval(samples, t);
+  if (i + 1 >= samples.size()) return samples.back().speed;
+
+  const auto& s0 = samples[i];
+  const auto& s1 = samples[i + 1];
+  const double dt = s1.time - s0.time;
+  if (dt <= min_time_epsilon) return s0.speed;
+
+  double a = (t - s0.time) / dt;
+  a = std::clamp(a, 0.0, 1.0);
+  return (1.0 - a) * s0.speed + a * s1.speed;
+}
+
+}  // namespace
+
 DeskewAlgorithm::DeskewAlgorithm(const DeskewParams& params,
                                  const rclcpp::Logger& logger,
                                  const rclcpp::Clock& clock)
@@ -78,34 +140,30 @@ double DeskewAlgorithm::InterpolateSpeed(double t) const {
   return (1.0 - a) * s0.speed + a * s1.speed;
 }
 
-std::optional<sensor_msgs::msg::PointCloud2>
-DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
+std::optional<DeskewInput> DeskewAlgorithm::TakeReadyCloud() {
   if (imu_queue_.Size() < 2 || lidar_queue_.Size() < 1) {
     return {};
   }
-  sensor_msgs::msg::PointCloud2 out;
-  size_t n = 0;
-  double scan_time = 0;
-  double scan_start_time = 0.0;
-  double scan_end_time = 0.0;
+
   const double imu_start_time = imu_queue_.PeerFront().time;
   const double imu_last_time = imu_queue_.PeerBack().time;
-  bool found_cloud = false;
+
   while (lidar_queue_.Size() > 0) {
     const sensor_msgs::msg::PointCloud2& cloud = *lidar_queue_.PeerFront();
-    scan_time = rclcpp::Time(cloud.header.stamp).seconds();
-    scan_start_time = prms_.stamp_is_scan_end_ ? scan_time - prms_.scan_period_
-                                               : scan_time;
-    scan_end_time = prms_.stamp_is_scan_end_ ? scan_time
-                                             : scan_time + prms_.scan_period_;
-    n = static_cast<size_t>(cloud.width) * static_cast<size_t>(cloud.height);
+    const double scan_time = rclcpp::Time(cloud.header.stamp).seconds();
+    const double scan_start_time = prms_.stamp_is_scan_end_
+                                       ? scan_time - prms_.scan_period_
+                                       : scan_time;
+    const double scan_end_time = prms_.stamp_is_scan_end_
+                                     ? scan_time
+                                     : scan_time + prms_.scan_period_;
+    const size_t n =
+        static_cast<size_t>(cloud.width) * static_cast<size_t>(cloud.height);
     if (n == 0) {
       lidar_queue_.PopFront();
       RCLCPP_DEBUG(logger_, "Popped empty lidar cloud");
       continue;
     }
-
-    UnwrapAzimuthParams(cloud);
 
     if (scan_end_time > imu_last_time) {
       RCLCPP_DEBUG(logger_,
@@ -122,120 +180,123 @@ DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
       continue;
     }
 
-    out = cloud;
-    found_cloud = true;
-    break;
-  }
+    if (speed_queue_.Size() < 1) {
+      RCLCPP_DEBUG(logger_, "Waiting for speed data");
+      return {};
+    }
 
-  if (!found_cloud) {
-    return {};
-  }
+    const double speed_age = scan_end_time - speed_queue_.PeerBack().time;
+    if (speed_age > prms_.max_speed_age) {
+      RCLCPP_DEBUG(logger_,
+                   "Waiting for recent speed data. last speed=%.6f scan end=%.6f age=%.3f max=%.3f",
+                   speed_queue_.PeerBack().time, scan_end_time, speed_age,
+                   prms_.max_speed_age);
+      return {};
+    }
 
-  // double az_span = azs_.max_az - azs_.min_az;
-  if (azs_.GetRange() <= prms_.azimuth_range_epsilon) {
+    DeskewInput input;
+    input.cloud = cloud;
+    input.scan_time = scan_time;
+    input.imu_samples = CopyQueue(imu_queue_);
+    input.speed_samples = CopyQueue(speed_queue_);
     lidar_queue_.PopFront();
+    return input;
+  }
+
+  return {};
+}
+
+std::optional<sensor_msgs::msg::PointCloud2> DeskewAlgorithm::DeskewCloud(
+    const DeskewInput& input, const Eigen::Matrix3d& R_lidar_body) {
+  sensor_msgs::msg::PointCloud2 out = input.cloud;
+  const size_t n = static_cast<size_t>(out.width) * static_cast<size_t>(out.height);
+  if (n == 0) return {};
+
+  UnwrapAzimuthParams(out);
+
+  if (azs_.GetRange() <= prms_.azimuth_range_epsilon) {
     RCLCPP_WARN(logger_, "Invalid azimuth span, skipping deskew");
     return {};
   }
 
-  if (speed_queue_.Size() < 1) {
-    RCLCPP_DEBUG(logger_, "Waiting for speed data");
+  const auto x_offset = FieldOffset(out, "x");
+  const auto y_offset = FieldOffset(out, "y");
+  if (!x_offset || !y_offset) {
+    RCLCPP_WARN(logger_, "PointCloud2 is missing x/y fields, skipping deskew");
     return {};
   }
 
-  if (speed_queue_.PeerBack().time < scan_end_time) {
-    RCLCPP_DEBUG(
-        logger_,
-        "Waiting for future speed data. last speed=%.6f scan end=%.6f",
-        speed_queue_.PeerBack().time, scan_end_time);
-    return {};
-  }
+  const Eigen::Vector3d lidar_forward = R_lidar_body.col(0);
+  const uint32_t point_step = out.point_step;
+  uint8_t* const data = out.data.data();
+  const double scan_time = input.scan_time;
+  const double scan_start = prms_.stamp_is_scan_end_
+                                ? scan_time - prms_.scan_period_
+                                : scan_time;
+  const double relative_time_tolerance = prms_.relative_time_tolerance;
+  const double scan_period = prms_.scan_period_;
+  const double min_time_epsilon = prms_.min_time_epsilon;
+  const auto& imu_samples = input.imu_samples;
+  const auto& speed_samples = input.speed_samples;
 
-  lidar_queue_.PopFront();
+#pragma omp parallel for schedule(static)
+  for (std::ptrdiff_t signed_idx = 0; signed_idx < static_cast<std::ptrdiff_t>(n);
+       ++signed_idx) {
+    const size_t idx = static_cast<size_t>(signed_idx);
+    uint8_t* const point = data + idx * point_step;
 
-  sensor_msgs::PointCloud2Iterator<float> x_it(out, "x");
-  sensor_msgs::PointCloud2Iterator<float> y_it(out, "y");
+    float x = 0.0f;
+    float y = 0.0f;
+    std::memcpy(&x, point + *x_offset, sizeof(float));
+    std::memcpy(&y, point + *y_offset, sizeof(float));
 
-  size_t imu_idx = 0;
-  for (size_t idx = 0; idx < n; ++idx, ++x_it, ++y_it) {
-    const float x = *x_it;
-    const float y = *y_it;
+    if (!IsFinitePoint(x, y)) continue;
 
-    if (!IsFinitePoint(x, y)) {
-      // RCLCPP_WARN(logger_, "Infinite point");
+    const double relative_time = azs_.GetRelativeTime(idx);
+    if (!std::isfinite(relative_time)) continue;
+    if (relative_time < -relative_time_tolerance ||
+        relative_time > 1.0 + relative_time_tolerance) {
       continue;
     }
-    double relative_time = azs_.GetRelativeTime(idx);
-    if (!std::isfinite(relative_time)) {
-      continue;
-    }
 
-    if (relative_time < -prms_.relative_time_tolerance ||
-        relative_time > 1.0 + prms_.relative_time_tolerance) {
-      continue;
-    }
-    double point_time = PointTimeFromIndex(relative_time, scan_time);
-
+    const double point_time = scan_start + relative_time * scan_period;
     const double signed_dt = point_time - scan_time;
-    const double abs_dt = std::abs(signed_dt);
+    if (std::abs(signed_dt) > scan_period + min_time_epsilon) continue;
 
-    if (abs_dt > prms_.scan_period_ + prms_.min_time_epsilon) {
-      RCLCPP_WARN_THROTTLE(logger_, clock_, prms_.log_throttle,
-                           "Bad deskew_dt %.6f rel=%.3f az=%.3f range=%.3f",
-                           signed_dt, relative_time, azs_.unwrapped_az[idx],
-                           azs_.GetRange());
-      continue;
-    }
+    const size_t imu_idx = FindInterval(imu_samples, point_time);
+    if (imu_idx + 1 >= imu_samples.size()) continue;
 
-    while (imu_idx + 1 < imu_queue_.Size() &&
-           imu_queue_[imu_idx + 1].time < point_time) {
-      imu_idx++;
-    }
-
-    if (imu_idx + 1 >= imu_queue_.Size()) {
-      RCLCPP_WARN(logger_, "Queue index is out of range: %d",
-                  static_cast<int>(imu_idx));
-      return {};
-    }
-
-    const auto& imu0 = imu_queue_[imu_idx];
-    const auto& imu1 = imu_queue_[imu_idx + 1];
-
-    double imu_dt = imu1.time - imu0.time;
-    if (imu_dt <= prms_.min_time_epsilon) {
-      RCLCPP_WARN(logger_, "Too little imu_dt: %.6f", imu_dt);
-      continue;
-    }
+    const auto& imu0 = imu_samples[imu_idx];
+    const auto& imu1 = imu_samples[imu_idx + 1];
+    const double imu_dt = imu1.time - imu0.time;
+    if (imu_dt <= min_time_epsilon) continue;
 
     double alpha = (point_time - imu0.time) / imu_dt;
     alpha = std::clamp(alpha, 0.0, 1.0);
-
-    double rate = (1.0 - alpha) * imu0.rate + alpha * imu1.rate;
-
-    double dyaw = -rate * signed_dt;
+    const double rate = (1.0 - alpha) * imu0.rate + alpha * imu1.rate;
+    const double dyaw = -rate * signed_dt;
 
     const double cos_yaw = std::cos(dyaw);
     const double sin_yaw = std::sin(dyaw);
+    const double speed = ::InterpolateSpeed(speed_samples, point_time,
+                                            min_time_epsilon);
 
-    double speed = InterpolateSpeed(point_time);
+    const double dx = lidar_forward.x() * speed * signed_dt;
+    const double dy = lidar_forward.y() * speed * signed_dt;
 
-    Eigen::Vector3d v_body(speed, 0.0, 0.0);
-    Eigen::Vector3d v_lidar = R_lidar_body * v_body;
+    const float rx = static_cast<float>(cos_yaw * x - sin_yaw * y + dx);
+    const float ry = static_cast<float>(sin_yaw * x + cos_yaw * y + dy);
 
-    double dx = v_lidar.x() * signed_dt;
-    double dy = v_lidar.y() * signed_dt;
-
-    float rx = cos_yaw * x - sin_yaw * y + dx;
-    float ry = sin_yaw * x + cos_yaw * y + dy;
-
-    *x_it = rx;
-    *y_it = ry;
-    if (prms_.debug) {
-      RCLCPP_INFO_THROTTLE(
-          logger_, clock_, prms_.log_throttle,
-          "idx=%zu t=%.6f dt=%.4f alpha=%.2f rate=%.3f dyaw=%.4f", idx,
-          point_time, signed_dt, alpha, rate, dyaw);
-    }
+    std::memcpy(point + *x_offset, &rx, sizeof(float));
+    std::memcpy(point + *y_offset, &ry, sizeof(float));
   }
+
   return out;
+}
+
+std::optional<sensor_msgs::msg::PointCloud2>
+DeskewAlgorithm::ProcessCloudsQueue(const Eigen::Matrix3d& R_lidar_body) {
+  std::optional<DeskewInput> input = TakeReadyCloud();
+  if (!input) return {};
+  return DeskewCloud(*input, R_lidar_body);
 }

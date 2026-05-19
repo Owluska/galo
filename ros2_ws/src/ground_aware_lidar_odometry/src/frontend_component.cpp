@@ -1,5 +1,6 @@
 #include "ground_aware_lidar_odometry/frontend_component.hpp"
 
+#include <exception>
 #include <sstream>
 
 #include "ground_aware_lidar_odometry/feature_conversions.hpp"
@@ -12,6 +13,18 @@ template <typename T>
 T DeclareAndGet(rclcpp::Node& node, const std::string& name,
                 const T& default_value) {
   return node.declare_parameter<T>(name, default_value);
+}
+
+bool ShouldLogSteady(std::chrono::steady_clock::time_point& last_log_time,
+                     int throttle_ms) {
+  const auto now = std::chrono::steady_clock::now();
+  const auto throttle = std::chrono::milliseconds(throttle_ms);
+  if (last_log_time == std::chrono::steady_clock::time_point{} ||
+      now - last_log_time >= throttle) {
+    last_log_time = now;
+    return true;
+  }
+  return false;
 }
 
 }  // namespace
@@ -53,32 +66,36 @@ GaloFrontendComponent::GaloFrontendComponent(
 
 void GaloFrontendComponent::CloudCb(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-  const auto callback_start = std::chrono::steady_clock::now();
-  FrontendResult result = frontend_.Extract(*msg, params_.debug);
+  try {
+    const auto callback_start = std::chrono::steady_clock::now();
+    FrontendResult result = frontend_.Extract(*msg, params_.debug);
 
-  TimeMeasurments_t conversion_meas("feature_msg_conversion");
-  auto features_msg = ToMsg(result.features);
-  conversion_meas.SetEnd();
-  result.measurements.push_back(conversion_meas);
+    TimeMeasurments_t conversion_meas("feature_msg_conversion");
+    auto features_msg = ToMsg(result.features);
+    conversion_meas.SetEnd();
+    result.measurements.push_back(conversion_meas);
 
-  if (result.colored_cloud) {
-    colored_pub_->publish(*result.colored_cloud);
+    if (result.colored_cloud) {
+      colored_pub_->publish(*result.colored_cloud);
+    }
+    if (result.ground_markers) {
+      ground_patches_pub_->publish(*result.ground_markers);
+    }
+
+    TimeMeasurments_t publish_meas("feature_publish");
+    features_pub_->publish(features_msg);
+    publish_meas.SetEnd();
+    result.measurements.push_back(publish_meas);
+
+    TimeMeasurments_t callback_meas("frontend_callback_total");
+    callback_meas.start = callback_start;
+    callback_meas.SetEnd();
+    result.measurements.push_back(callback_meas);
+
+    PrintTimeMeasurements(result.measurements);
+  } catch (const std::exception& ex) {
+    RCLCPP_ERROR(this->get_logger(), "Dropping frontend cloud: %s", ex.what());
   }
-  if (result.ground_markers) {
-    ground_patches_pub_->publish(*result.ground_markers);
-  }
-
-  TimeMeasurments_t publish_meas("feature_publish");
-  features_pub_->publish(features_msg);
-  publish_meas.SetEnd();
-  result.measurements.push_back(publish_meas);
-
-  TimeMeasurments_t callback_meas("frontend_callback_total");
-  callback_meas.start = callback_start;
-  callback_meas.SetEnd();
-  result.measurements.push_back(callback_meas);
-
-  PrintTimeMeasurements(result.measurements);
 }
 
 void GaloFrontendComponent::PrintTimeMeasurements(
@@ -107,8 +124,9 @@ void GaloFrontendComponent::PrintTimeMeasurements(
        << GetDelayMs(measurement.start, measurement.end);
   }
 
-  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(),
-                       params_.log_throttle, "%s", ss.str().c_str());
+  if (ShouldLogSteady(last_timing_info_time_, params_.log_throttle)) {
+    RCLCPP_INFO(this->get_logger(), "%s", ss.str().c_str());
+  }
 }
 
 GaloFrontendComponent::Params GaloFrontendComponent::LoadParams(

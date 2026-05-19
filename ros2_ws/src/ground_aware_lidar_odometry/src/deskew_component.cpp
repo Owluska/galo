@@ -1,5 +1,7 @@
 #include "ground_aware_lidar_odometry/deskew_component.hpp"
 
+#include <exception>
+
 #include "rclcpp_components/register_node_macro.hpp"
 
 namespace ground_aware_lidar_odometry {
@@ -36,7 +38,7 @@ GaloDeskewComponent::GaloDeskewComponent(const rclcpp::NodeOptions& options)
   sensor_options.callback_group = sensor_callback_group_;
 
   lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      params_.lidar_topic, 10,
+      params_.lidar_topic, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&GaloDeskewComponent::LidarCb, this, std::placeholders::_1),
       lidar_options);
   imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
@@ -57,6 +59,9 @@ GaloDeskewComponent::GaloDeskewComponent(const rclcpp::NodeOptions& options)
           sensor_options);
   deskew_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       params_.deskewed_cloud_topic, 1);
+  deskew_heartbeat_pub_ =
+      this->create_publisher<std_msgs::msg::Header>(
+          params_.deskewed_heartbeat_topic, 1);
 
   RCLCPP_INFO(this->get_logger(),
               "GALO deskew component: %s -> %s",
@@ -65,43 +70,64 @@ GaloDeskewComponent::GaloDeskewComponent(const rclcpp::NodeOptions& options)
 
 void GaloDeskewComponent::LidarCb(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-  if (!EnsureLidarBodyTf()) {
-    return;
-  }
+  try {
+    if (!EnsureLidarBodyTf()) {
+      return;
+    }
 
-  std::optional<sensor_msgs::msg::PointCloud2> deskewed;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    deskew_algorithm_.UpdateLidarQueue(msg);
-    deskewed =
-        deskew_algorithm_.ProcessCloudsQueue(q_lidar_body_.toRotationMatrix());
-  }
+    std::optional<DeskewInput> input;
+    Eigen::Matrix3d R_lidar_body = Eigen::Matrix3d::Identity();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      deskew_algorithm_.UpdateLidarQueue(msg);
+      input = deskew_algorithm_.TakeReadyCloud();
+      R_lidar_body = q_lidar_body_.toRotationMatrix();
+    }
 
-  if (deskewed) {
-    deskew_pub_->publish(*deskewed);
+    if (!input) {
+      return;
+    }
+
+    std::optional<sensor_msgs::msg::PointCloud2> deskewed =
+        deskew_algorithm_.DeskewCloud(*input, R_lidar_body);
+    if (deskewed) {
+      deskew_pub_->publish(*deskewed);
+      deskew_heartbeat_pub_->publish(deskewed->header);
+    }
+  } catch (const std::exception& ex) {
+    RCLCPP_ERROR(this->get_logger(), "Dropping lidar message: %s", ex.what());
   }
 }
 
 void GaloDeskewComponent::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  deskew_algorithm_.UpdateImuQueue(
-      msg->angular_velocity.z, rclcpp::Time(msg->header.stamp).seconds());
+  try {
+    std::lock_guard<std::mutex> lock(mutex_);
+    deskew_algorithm_.UpdateImuQueue(
+        msg->angular_velocity.z, rclcpp::Time(msg->header.stamp).seconds());
+  } catch (const std::exception& ex) {
+    RCLCPP_ERROR(this->get_logger(), "Dropping IMU message: %s", ex.what());
+  }
 }
 
 void GaloDeskewComponent::WheelSpeedCb(
     const common_msgs::msg::WheelSpeed::SharedPtr msg) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  wheel_data_.wheel_angle = last_wheel_angle_;
-  wheel_data_.left_speed = msg->rear_left;
-  wheel_data_.right_speed = msg->rear_right;
-  wheel_data_.wheel_time = rclcpp::Time(msg->header.stamp).seconds();
-  wheel_data_.has_wheel_data = true;
+  try {
+    std::lock_guard<std::mutex> lock(mutex_);
+    wheel_data_.wheel_angle = last_wheel_angle_;
+    wheel_data_.left_speed = msg->rear_left;
+    wheel_data_.right_speed = msg->rear_right;
+    wheel_data_.wheel_time = rclcpp::Time(msg->header.stamp).seconds();
+    wheel_data_.has_wheel_data = true;
 
-  const RearWheelSpeedResult speed_result =
-      position_predictor_.EstimateRearAxleSpeed(wheel_data_);
-  if (speed_result.valid) {
-    deskew_algorithm_.UpdateSpeedQueue(speed_result.speed,
-                                       wheel_data_.wheel_time);
+    const RearWheelSpeedResult speed_result =
+        position_predictor_.EstimateRearAxleSpeed(wheel_data_);
+    if (speed_result.valid) {
+      deskew_algorithm_.UpdateSpeedQueue(speed_result.speed,
+                                         wheel_data_.wheel_time);
+    }
+  } catch (const std::exception& ex) {
+    RCLCPP_ERROR(this->get_logger(), "Dropping wheel speed message: %s",
+                 ex.what());
   }
 }
 
@@ -130,11 +156,15 @@ bool GaloDeskewComponent::EnsureLidarBodyTf() {
                                     tf_msg.transform.translation.z);
     has_lidar_body_tf_ = true;
   } catch (const tf2::TransformException& ex) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(),
-                         deskew_params_.log_throttle,
-                         "Failed to get TF %s <- %s: %s",
-                         params_.lidar_frame.c_str(),
-                         params_.body_frame.c_str(), ex.what());
+    const auto now = std::chrono::steady_clock::now();
+    const auto throttle = std::chrono::milliseconds(deskew_params_.log_throttle);
+    if (last_tf_warn_time_ == std::chrono::steady_clock::time_point{} ||
+        now - last_tf_warn_time_ >= throttle) {
+      last_tf_warn_time_ = now;
+      RCLCPP_WARN(this->get_logger(), "Failed to get TF %s <- %s: %s",
+                  params_.lidar_frame.c_str(), params_.body_frame.c_str(),
+                  ex.what());
+    }
     return false;
   }
 
@@ -157,6 +187,8 @@ GaloDeskewComponent::Params GaloDeskewComponent::LoadParams(
                                                    p.wheel_angle_topic);
   p.deskewed_cloud_topic = DeclareAndGet<std::string>(
       node, "topics.deskewed_cloud", p.deskewed_cloud_topic);
+  p.deskewed_heartbeat_topic = DeclareAndGet<std::string>(
+      node, "topics.deskewed_heartbeat", p.deskewed_heartbeat_topic);
   return p;
 }
 
@@ -181,6 +213,8 @@ DeskewParams GaloDeskewComponent::LoadDeskewParams(rclcpp::Node& node) {
       node, "deskew.relative_time_tolerance", p.relative_time_tolerance);
   p.azimuth_range_epsilon = DeclareAndGet<double>(
       node, "deskew.azimuth_range_epsilon", p.azimuth_range_epsilon);
+  p.max_speed_age =
+      DeclareAndGet<double>(node, "deskew.max_speed_age", p.max_speed_age);
   return p;
 }
 

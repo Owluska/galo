@@ -29,6 +29,7 @@ find_package(gps_msgs REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common kdtree)
 find_package(pcl_conversions REQUIRED)
 find_package(qarl_msgs REQUIRED)
+find_package(OpenMP REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/Point2D.msg
@@ -157,12 +158,14 @@ target_link_libraries(galo_odometry_component
   Eigen3::Eigen
   ${PCL_LIBRARIES}
   GeographicLib
+  OpenMP::OpenMP_CXX
 )
 target_link_libraries(node
   galo_odometry_component
 )
 target_link_libraries(galo_deskew_component
   Eigen3::Eigen
+  OpenMP::OpenMP_CXX
 )
 target_link_libraries(galo_frontend_component
   Eigen3::Eigen

@@ -38,7 +38,7 @@ struct PointCloudAzimuthPrms {
     last_az = -1.0;  // -1 is a safe flag since az is always in [0, 2PI]
   }
 
-  double GetRelativeTime(size_t idx) {
+  double GetRelativeTime(size_t idx) const {
     // 1. Counter-Clockwise (or Chronological)
     // 2. Clockwise (or Reverse Chronological)
     // As angle decreases, time increases.
@@ -63,7 +63,14 @@ struct PointCloudAzimuthPrms {
     return rel_cw;
   }
 
-  double GetRange() { return max_az - min_az; }
+  double GetRange() const { return max_az - min_az; }
+};
+
+struct DeskewInput {
+  CloudMsg cloud;
+  std::vector<YawRateStamped> imu_samples;
+  std::vector<SpeedStamped> speed_samples;
+  double scan_time = 0.0;
 };
 
 struct DeskewParams {
@@ -77,6 +84,7 @@ struct DeskewParams {
   double min_time_epsilon = 1e-6;
   double relative_time_tolerance = 1e-3;
   double azimuth_range_epsilon = 1e-6;
+  double max_speed_age = 0.5;
 };
 
 class DeskewAlgorithm {
@@ -116,6 +124,9 @@ class DeskewAlgorithm {
   void UpdateLidarQueue(const CloudMsg::SharedPtr msg) {
     lidar_queue_.Update(msg);
   }
+  std::optional<DeskewInput> TakeReadyCloud();
+  std::optional<CloudMsg> DeskewCloud(const DeskewInput& input,
+                                      const Eigen::Matrix3d& R_lidar_body);
   std::optional<CloudMsg> ProcessCloudsQueue(
       const Eigen::Matrix3d& R_lidar_body);
 };

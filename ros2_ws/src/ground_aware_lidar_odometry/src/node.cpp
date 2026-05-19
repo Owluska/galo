@@ -1,7 +1,24 @@
 #include "ground_aware_lidar_odometry/node.hpp"
 
 #include "ground_aware_lidar_odometry/feature_conversions.hpp"
+
+#include <exception>
+
 #include "rclcpp_components/register_node_macro.hpp"
+
+namespace {
+bool ShouldLogSteady(std::chrono::steady_clock::time_point& last_log_time,
+                     int throttle_ms) {
+  const auto now = std::chrono::steady_clock::now();
+  const auto throttle = std::chrono::milliseconds(throttle_ms);
+  if (last_log_time == std::chrono::steady_clock::time_point{} ||
+      now - last_log_time >= throttle) {
+    last_log_time = now;
+    return true;
+  }
+  return false;
+}
+}  // namespace
 
 GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
     : Node("galo", options),
@@ -144,12 +161,18 @@ void GaloOdometryComponent::PureStateCb(
 }
 
 void GaloOdometryComponent::GnssCorrectionTimerCb() {
-  while (rclcpp::ok() && !TryInitializeOdomFromGnss(true)) {
-    RCLCPP_WARN_THROTTLE(
-        this->get_logger(), *this->get_clock(),
-        node_params_.initialization_log_throttle,
-        "Waiting for GNSS position/yaw to correct LiDAR odometry");
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  try {
+    while (rclcpp::ok() && !TryInitializeOdomFromGnss(true)) {
+      if (ShouldLogSteady(last_gnss_correction_warn_time_,
+                          node_params_.initialization_log_throttle)) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Waiting for GNSS position/yaw to correct LiDAR odometry");
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  } catch (const std::exception& ex) {
+    RCLCPP_ERROR(this->get_logger(), "GNSS correction timer failed: %s",
+                 ex.what());
   }
 }
 
@@ -363,10 +386,25 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
     const FrameFeatures& features) {
   const double lidar_time = features.lidar_time;
   if (!TryInitializeOdomFromGnss()) {
-    RCLCPP_WARN_THROTTLE(
-        this->get_logger(), *this->get_clock(),
-        node_params_.initialization_log_throttle,
-        "Waiting for GNSS position/yaw to initialize LiDAR odometry");
+    if (ShouldLogSteady(last_initialization_warn_time_,
+                        node_params_.initialization_log_throttle)) {
+      GnssData gnss_snapshot;
+      bool has_base_snapshot = false;
+      size_t imu_queue_size = 0;
+      {
+        std::lock_guard<std::mutex> lock(mut_);
+        gnss_snapshot = gnss_data_;
+        has_base_snapshot = has_latest_R_base_;
+        imu_queue_size = imu_orientation_queue_.Size();
+      }
+      RCLCPP_WARN(this->get_logger(),
+                  "Odometry gate: waiting for GNSS init. "
+                  "pos=%d yaw=%d base=%d imu_queue=%zu lidar_time=%.6f "
+                  "gnss_pos_time=%.6f gnss_yaw_time=%.6f",
+                  gnss_snapshot.has_gnss_position_, gnss_snapshot.has_gnss_yaw,
+                  has_base_snapshot, imu_queue_size, lidar_time,
+                  gnss_snapshot.nmea_time, gnss_snapshot.yaw_time);
+    }
     return;
   }
   PruneStaleMapFrames(lidar_time);
@@ -391,18 +429,31 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
     RebuildObjectsMap();
     RCLCPP_WARN(
         this->get_logger(),
-        "Initialized first map frame at pose t=[%.3f %.3f %.3f], yaw=%.3f",
+        "Odometry gate: initialized first map frame, next frame should publish. "
+        "pose t=[%.3f %.3f %.3f], yaw=%.3f planar_points=%zu ground_patches=%zu",
         t_map_lidar.x(), t_map_lidar.y(), t_map_lidar.z(),
-        std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0)));
+        std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0)),
+        features.planar_points.size(), features.ground_patches.size());
     return;
   }
   bool has_imu_history = false;
+  size_t imu_queue_size = 0;
   {
     std::lock_guard<std::mutex> lock(mut_);
-    has_imu_history = imu_orientation_queue_.Size() >= 2;
+    imu_queue_size = imu_orientation_queue_.Size();
+    has_imu_history = imu_queue_size >= 2;
   }
-  if (!GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame) ||
-      !has_imu_history) {
+  const bool has_extrinsic = GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame);
+  if (!has_extrinsic || !has_imu_history) {
+    if (ShouldLogSteady(last_odometry_gate_warn_time_,
+                        node_params_.registration_log_throttle)) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Odometry gate: missing %s%s. lidar_time=%.6f imu_queue=%zu",
+                  has_extrinsic ? "" : "TF/extrinsic",
+                  (!has_extrinsic && !has_imu_history) ? "+IMU history" :
+                      (has_imu_history ? "" : "IMU history"),
+                  lidar_time, imu_queue_size);
+    }
     return;
   }
   GnssData gnss_data_local;
@@ -418,12 +469,36 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
   }
 
   if (!q_lidar) {
+    if (ShouldLogSteady(last_odometry_gate_warn_time_,
+                        node_params_.registration_log_throttle)) {
+      double imu_first = 0.0;
+      double imu_last = 0.0;
+      size_t imu_queue_size_local = 0;
+      {
+        std::lock_guard<std::mutex> lock(mut_);
+        imu_queue_size_local = imu_orientation_queue_.Size();
+        if (imu_queue_size_local > 0) {
+          imu_first = imu_orientation_queue_.PeerFront().time;
+          imu_last = imu_orientation_queue_.PeerBack().time;
+        }
+      }
+      RCLCPP_WARN(this->get_logger(),
+                  "Odometry gate: no IMU orientation at lidar_time=%.6f "
+                  "imu_queue=%zu imu_range=[%.6f, %.6f]",
+                  lidar_time, imu_queue_size_local, imu_first, imu_last);
+    }
     return;
   }
 
   if (!has_lidar_imu_prev_) {
     imu_q_lidar_prev_ = *q_lidar;
     has_lidar_imu_prev_ = true;
+    if (ShouldLogSteady(last_odometry_gate_warn_time_,
+                        node_params_.registration_log_throttle)) {
+      RCLCPP_INFO(this->get_logger(),
+                  "Odometry gate: primed first lidar/IMU orientation at %.6f",
+                  lidar_time);
+    }
     return;
   }
   // IMU relative rotation between previous and current LiDAR scan timestamps.
@@ -485,10 +560,14 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
   }
 
   if (!planar_reg_res.valid) {
-    RCLCPP_WARN_THROTTLE(
-        this->get_logger(), *this->get_clock(),
-        node_params_.registration_log_throttle,
-        "Planar registration invalid, skipping odometry update");
+    if (ShouldLogSteady(last_registration_warn_time_,
+                        node_params_.registration_log_throttle)) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Odometry gate: planar registration invalid. "
+                  "planar_points=%zu map_points=%zu lidar_time=%.6f",
+                  features.planar_points.size(), objects_map_.size(),
+                  lidar_time);
+    }
     return;
   }
   GroundRegistrationResult ground_reg_result;
@@ -521,10 +600,11 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
   }
 
   if (!planar_reg_res.valid) {
-    RCLCPP_WARN_THROTTLE(
-        this->get_logger(), *this->get_clock(),
-        node_params_.registration_log_throttle,
-        "Planar registration invalid, skipping odometry update");
+    if (ShouldLogSteady(last_registration_warn_time_,
+                        node_params_.registration_log_throttle)) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Planar registration invalid, skipping odometry update");
+    }
     return;
   }
   bool is_ground_ok = CheckGroundRegistration(ground_reg_result);
@@ -737,6 +817,13 @@ bool GaloOdometryComponent::TryInitializeOdomFromGnss(bool force_correction) {
 
     if (!gnss_data_.has_gnss_position_ || !gnss_data_.has_gnss_yaw ||
         !has_latest_R_base_) {
+      if (ShouldLogSteady(last_gnss_stale_warn_time_,
+                          node_params_.initialization_log_throttle)) {
+        RCLCPP_WARN(this->get_logger(),
+                    "GNSS init unavailable: pos=%d yaw=%d base=%d",
+                    gnss_data_.has_gnss_position_, gnss_data_.has_gnss_yaw,
+                    has_latest_R_base_);
+      }
       return false;
     }
 
@@ -745,11 +832,13 @@ bool GaloOdometryComponent::TryInitializeOdomFromGnss(bool force_correction) {
     const double yaw_age = now - gnss_data_.yaw_time;
     if (position_age < 0.0 || position_age > kMaxGnssDataAgeSec ||
         yaw_age < 0.0 || yaw_age > kMaxGnssDataAgeSec) {
-      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(),
-                           node_params_.initialization_log_throttle,
-                           "GNSS data is stale for LiDAR odometry correction: "
-                           "position_age=%.3f s yaw_age=%.3f s",
-                           position_age, yaw_age);
+      if (ShouldLogSteady(last_gnss_stale_warn_time_,
+                          node_params_.initialization_log_throttle)) {
+        RCLCPP_WARN(this->get_logger(),
+                    "GNSS data is stale for LiDAR odometry correction: "
+                    "position_age=%.3f s yaw_age=%.3f s",
+                    position_age, yaw_age);
+      }
       return false;
     }
 
@@ -812,9 +901,10 @@ void GaloOdometryComponent::PrintTimeMeasurments(
       ss << ", ";
     ss << m.label << " - " << GetDelayMs(m.start, m.end);
   }
-  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(),
-                       node_params_.registration_log_throttle, "%s",
-                       ss.str().c_str());
+  if (ShouldLogSteady(last_timing_info_time_,
+                      node_params_.registration_log_throttle)) {
+    RCLCPP_INFO(this->get_logger(), "%s", ss.str().c_str());
+  }
 }
 
 std::optional<Eigen::Quaterniond> GaloOdometryComponent::GetImuOrientationAt(
@@ -919,14 +1009,15 @@ void GaloOdometryComponent::PruneStaleMapFrames(double current_time) {
   }
 
   if (pruned_ground_frames > 0 || pruned_object_frames > 0) {
-    RCLCPP_INFO_THROTTLE(
-        this->get_logger(), *this->get_clock(),
-        node_params_.registration_log_throttle,
-        "Pruned stale map frames: ground=%zu objects=%zu "
-        "threshold=%.1f ms remaining_ground=%zu remaining_objects=%zu",
-        pruned_ground_frames, pruned_object_frames,
-        node_params_.map_stale_threshold_ms, ground_map_frames_.size(),
-        objects_map_frames_.size());
+    if (ShouldLogSteady(last_prune_info_time_,
+                        node_params_.registration_log_throttle)) {
+      RCLCPP_INFO(this->get_logger(),
+                  "Pruned stale map frames: ground=%zu objects=%zu "
+                  "threshold=%.1f ms remaining_ground=%zu remaining_objects=%zu",
+                  pruned_ground_frames, pruned_object_frames,
+                  node_params_.map_stale_threshold_ms, ground_map_frames_.size(),
+                  objects_map_frames_.size());
+    }
   }
 }
 

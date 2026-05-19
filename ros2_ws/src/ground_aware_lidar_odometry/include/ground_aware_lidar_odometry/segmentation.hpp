@@ -182,9 +182,6 @@ class Segmentation {
   Segmentation(const GroundSegmentationParams& params) : params_(params) {
     grid_.reserve(params_.grid_reserve);
     smoothed_ground_z_.reserve(params_.smoothed_grid_reserve);
-    neighbor_ground_zs_.reserve(
-        static_cast<size_t>((2 * std::max(1, params_.neighbor_radius) + 1) *
-                            (2 * std::max(1, params_.neighbor_radius) + 1)));
   }
 
   SegmentationResult Classify(const CloudMsg& msg);
@@ -196,7 +193,6 @@ class Segmentation {
   GroundSegmentationParams params_;
   std::unordered_map<CellKey, GridCell, CellKeyHash> grid_;
   std::unordered_map<CellKey, double, CellKeyHash> smoothed_ground_z_;
-  mutable std::vector<double> neighbor_ground_zs_;
 
   std::pair<int, int> GetIndexes(float x, float y) const;
 
@@ -258,9 +254,7 @@ class PlanarRegistration {
  public:
   PlanarRegistration(const PlanarRegistrationParams params,
                      const rclcpp::Logger& logger, const rclcpp::Clock& clock)
-      : params_(params), logger_(logger), clock_(clock) {
-    extraction_grid_.reserve(static_cast<size_t>(params_.grid_reserve));
-  }
+      : params_(params), logger_(logger), clock_(clock) {}
 
   PlanarRegistrationResult Align(const std::vector<Eigen::Vector2d>& map,
                                  const std::vector<Eigen::Vector2d>& current,
@@ -278,5 +272,4 @@ class PlanarRegistration {
   PlanarRegistrationParams params_;
   rclcpp::Logger logger_;
   rclcpp::Clock clock_;
-  mutable std::unordered_map<CellKey, Voxel2D, CellKeyHash> extraction_grid_;
 };

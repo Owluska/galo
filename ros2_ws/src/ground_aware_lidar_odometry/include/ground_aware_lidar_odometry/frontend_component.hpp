@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <string>
 
 #include "ground_aware_lidar_odometry/frontend.hpp"
@@ -30,6 +31,7 @@ class GaloFrontendComponent : public rclcpp::Node {
   GroundPatchParams ground_patch_params_;
   PlanarRegistrationParams planar_registration_params_;
   GaloFrontend frontend_;
+  std::chrono::steady_clock::time_point last_timing_info_time_{};
 
   rclcpp::CallbackGroup::SharedPtr callback_group_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;

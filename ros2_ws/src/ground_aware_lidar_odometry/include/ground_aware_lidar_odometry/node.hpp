@@ -179,6 +179,13 @@ class GaloOdometryComponent : public rclcpp::Node {
   bool has_latest_R_base_ = false;
   bool has_prev_lidar_pose_for_prediction_ = false;
   double prev_lidar_pose_time_ = 0.0;
+  std::chrono::steady_clock::time_point last_gnss_correction_warn_time_{};
+  std::chrono::steady_clock::time_point last_initialization_warn_time_{};
+  std::chrono::steady_clock::time_point last_registration_warn_time_{};
+  std::chrono::steady_clock::time_point last_gnss_stale_warn_time_{};
+  std::chrono::steady_clock::time_point last_prune_info_time_{};
+  std::chrono::steady_clock::time_point last_timing_info_time_{};
+  std::chrono::steady_clock::time_point last_odometry_gate_warn_time_{};
   double last_wa_ = 0;
   std::mutex mut_;
 

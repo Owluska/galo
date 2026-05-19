@@ -3,6 +3,7 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -15,6 +16,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "std_msgs/msg/header.hpp"
 
 namespace ground_aware_lidar_odometry {
 
@@ -31,6 +33,7 @@ class GaloDeskewComponent : public rclcpp::Node {
     std::string wheel_speed_topic = "/FB/wheel_speed_feedback";
     std::string wheel_angle_topic = "/FB/wangle_feedback";
     std::string deskewed_cloud_topic = "/GALO/deskewed_cloud";
+    std::string deskewed_heartbeat_topic = "/GALO/deskewed_cloud_heartbeat";
   };
 
   Params params_;
@@ -39,6 +42,7 @@ class GaloDeskewComponent : public rclcpp::Node {
 
   std::mutex mutex_;
   bool has_lidar_body_tf_ = false;
+  std::chrono::steady_clock::time_point last_tf_warn_time_{};
   double last_wheel_angle_ = 0.0;
   WheelSpeedAngleData wheel_data_;
   Eigen::Quaterniond q_lidar_body_ = Eigen::Quaterniond::Identity();
@@ -54,6 +58,7 @@ class GaloDeskewComponent : public rclcpp::Node {
   rclcpp::Subscription<qarl_msgs::msg::WAngleFeedback>::SharedPtr
       wheel_angle_sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskew_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr deskew_heartbeat_pub_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
