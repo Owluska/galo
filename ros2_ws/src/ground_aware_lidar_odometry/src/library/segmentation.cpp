@@ -1,34 +1,4 @@
 #include "ground_aware_lidar_odometry/segmentation.hpp"
-
-namespace {
-
-void ResetCellValues(
-    std::unordered_map<CellKey, GridCell, CellKeyHash>& map) {
-  for (auto& [key, cell] : map) {
-    cell.count = 0;
-    cell.min_z = std::numeric_limits<double>::infinity();
-    cell.zs.clear();
-  }
-}
-
-void ResetCellValues(
-    std::unordered_map<CellKey, PatchCell, CellKeyHash>& map) {
-  for (auto& [key, cell] : map) {
-    cell.count = 0;
-    cell.sum.setZero();
-    cell.sum_outer.setZero();
-  }
-}
-
-void ResetCellValues(std::unordered_map<CellKey, Voxel2D, CellKeyHash>& map) {
-  for (auto& [key, cell] : map) {
-    cell.count = 0;
-    cell.sum.setZero();
-  }
-}
-
-}  // namespace
-
 std::pair<int, int> Segmentation::GetIndexes(float x, float y) const {
   int ix = static_cast<int>(std::floor(x / params_.cell_size));
   int iy = static_cast<int>(std::floor(y / params_.cell_size));
@@ -41,7 +11,7 @@ void Segmentation::FillGrid(const CloudMsg& msg) {
   sensor_msgs::PointCloud2ConstIterator<float> x_it(msg, "x");
   sensor_msgs::PointCloud2ConstIterator<float> y_it(msg, "y");
   sensor_msgs::PointCloud2ConstIterator<float> z_it(msg, "z");
-  ResetCellValues(grid_);
+  grid_.clear();
   for (size_t idx = 0; idx < n; ++x_it, ++y_it, ++z_it, ++idx) {
     float x = *x_it;
     float y = *y_it;
@@ -60,13 +30,6 @@ void Segmentation::FillGrid(const CloudMsg& msg) {
     cell.count++;
     cell.zs.push_back(z);
   }
-  for (auto it = grid_.begin(); it != grid_.end();) {
-    if (it->second.count == 0) {
-      it = grid_.erase(it);
-    } else {
-      ++it;
-    }
-  }
   for (auto& [key, cell] : grid_) {
     cell.CellGroundZ(params_.ground_z_quantile);
   }
@@ -80,41 +43,42 @@ void Segmentation::FillSmoothedGrid() {
 }
 
 double Segmentation::GetNeighborGroundZ(const CellKey& key) const {
-  neighbor_ground_zs_.clear();
-  const int radius = std::max(1, params_.neighbor_radius);
-  const auto min_neighbor_cells =
-      static_cast<size_t>(std::max(0, params_.min_neighbor_cells));
-
+  if (params_.neighbor_radius == 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  std::vector<double> zs;
+  const int radius = params_.neighbor_radius;
   for (int dx = -radius; dx <= radius; ++dx) {
     for (int dy = -radius; dy <= radius; ++dy) {
       CellKey nk{key.x + dx, key.y + dy};
 
       auto it = grid_.find(nk);
-      if (it == grid_.end()) continue;
+      if (it == grid_.end() || std::isnan(it->second.min_z)) continue;
 
       const auto& cell = it->second;
-      if (cell.count < params_.min_points_per_cell) continue;
 
-      neighbor_ground_zs_.push_back(cell.min_z);
+      zs.insert(zs.end(), cell.zs.begin(), cell.zs.end());
     }
   }
 
-  if (neighbor_ground_zs_.size() < min_neighbor_cells) {
+  if (zs.size() < params_.min_points_per_cell) {
     return std::numeric_limits<double>::quiet_NaN();
   }
 
-  const size_t median_idx = neighbor_ground_zs_.size() / 2;
-  std::nth_element(
-      neighbor_ground_zs_.begin(),
-      neighbor_ground_zs_.begin() + static_cast<std::ptrdiff_t>(median_idx),
-      neighbor_ground_zs_.end());
-  return neighbor_ground_zs_[median_idx];  // median
+  const size_t median_idx = zs.size() / 2;
+  std::nth_element(zs.begin(),
+                   zs.begin() + static_cast<std::ptrdiff_t>(median_idx),
+                   zs.end());
+  return zs[median_idx];  // median
 }
 
 SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
   SegmentationResult res;
   FillGrid(msg);
-  FillSmoothedGrid();
+  bool smoothing_is_off = params_.neighbor_radius == 0;
+  if (!smoothing_is_off) {
+    FillSmoothedGrid();
+  }
   sensor_msgs::msg::PointCloud2 ground, non_ground;
   size_t n = static_cast<size_t>(msg.width);
   n *= static_cast<size_t>(msg.height);
@@ -134,21 +98,30 @@ SegmentationResult Segmentation::Classify(const CloudMsg& msg) {
     }
     auto [ix, iy] = GetIndexes(x, y);
     CellKey key{ix, iy};
-    auto gz_it = smoothed_ground_z_.find(key);
-    if (gz_it == smoothed_ground_z_.end()) {
-      continue;
-    }
-    double ground_z = gz_it->second;
-    if (std::isnan(ground_z)) {
-      continue;
-    }
-    double dz = z - ground_z;
 
-    if (std::abs(dz) < params_.ground_height_threshold) {
-      res.labels[idx] = PointLabels::GROUND;
-    } else {
-      res.labels[idx] = PointLabels::NON_GROUND;
+    double ground_z = std::numeric_limits<double>::quiet_NaN();
+
+    if (!smoothing_is_off) {
+      auto gz_it = smoothed_ground_z_.find(key);
+      if (gz_it != smoothed_ground_z_.end()) {
+        ground_z = gz_it->second;
+      }
     }
+
+    if (std::isnan(ground_z)) {
+      auto raw_it = grid_.find(key);
+      if (raw_it == grid_.end() || std::isnan(raw_it->second.min_z) ||
+          raw_it->second.count < params_.min_points_per_cell) {
+        continue;
+      }
+
+      ground_z = raw_it->second.min_z;
+    }
+
+    const double dz = z - ground_z;
+    res.labels[idx] = std::abs(dz) <= params_.ground_height_threshold
+                          ? PointLabels::GROUND
+                          : PointLabels::NON_GROUND;
   }
   return res;
 }
@@ -232,7 +205,7 @@ std::pair<int, int> GroundPatchExtractor::GetIndexes(float x, float y) const {
 
 std::vector<GroundPatch> GroundPatchExtractor::Extract(
     const CloudMsg& cloud, const std::vector<PointLabels>& labels) {
-  ResetCellValues(patches_);
+  patches_.clear();
   valid_patches_.clear();
   size_t n = static_cast<size_t>(cloud.width);
   n *= static_cast<size_t>(cloud.height);
@@ -255,14 +228,6 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     CellKey key{ix, iy};
     PatchCell& cell = patches_[key];
     cell.AddPoint(Eigen::Vector3d(x, y, z));
-  }
-
-  for (auto it = patches_.begin(); it != patches_.end();) {
-    if (it->second.count == 0) {
-      it = patches_.erase(it);
-    } else {
-      ++it;
-    }
   }
 
   for (const auto& [key, patch_cell] : patches_) {
@@ -605,7 +570,8 @@ GroundRegistrationResult GroundRegistration::Align(
 
       // Find nearest map patch in map frame.
       //
-      // The search uses transformed XY position and checks normal consistency.
+      // The search uses transformed XY position and checks normal
+      // consistency.
       int match_idx = FindNearestPatchKDTree(p, cur_normal, map, kdtree);
       if (match_idx < 0) {
         continue;
@@ -813,8 +779,8 @@ GroundRegistrationResult GroundRegistration::Align(
 
     // Limit per-iteration step size.
     //
-    // The final correction can still be larger after several iterations, but no
-    // single iteration can make a dangerous jump.
+    // The final correction can still be larger after several iterations, but
+    // no single iteration can make a dangerous jump.
     dx(0) = std::clamp(dx(0), -params_.max_dz, params_.max_dz);
     dx(1) = std::clamp(dx(1), -params_.max_roll, params_.max_roll);
     dx(2) = std::clamp(dx(2), -params_.max_pitch, params_.max_pitch);
@@ -892,7 +858,8 @@ std::vector<Eigen::Vector2d> PlanarRegistration::ExtractFilteredPoints(
   n *= static_cast<size_t>(cloud.height);
   if (n == 0 || labels.size() != n) return {};
 
-  ResetCellValues(extraction_grid_);
+  std::unordered_map<CellKey, Voxel2D, CellKeyHash> grid;
+  grid.reserve(static_cast<size_t>(params_.grid_reserve));
 
   sensor_msgs::PointCloud2ConstIterator<float> x_it(cloud, "x");
   sensor_msgs::PointCloud2ConstIterator<float> y_it(cloud, "y");
@@ -906,23 +873,15 @@ std::vector<Eigen::Vector2d> PlanarRegistration::ExtractFilteredPoints(
 
     int ix = static_cast<int>(std::floor(x / params_.voxel_size));
     int iy = static_cast<int>(std::floor(y / params_.voxel_size));
-    auto& v = extraction_grid_[{ix, iy}];
+    auto& v = grid[{ix, iy}];
     v.count++;
     v.sum += Eigen::Vector2d(x, y);
   }
 
-  for (auto it = extraction_grid_.begin(); it != extraction_grid_.end();) {
-    if (it->second.count == 0) {
-      it = extraction_grid_.erase(it);
-    } else {
-      ++it;
-    }
-  }
-
   std::vector<Eigen::Vector2d> points;
-  points.reserve(extraction_grid_.size());
+  points.reserve(grid.size());
 
-  for (const auto& [key, v] : extraction_grid_) {
+  for (const auto& [key, v] : grid) {
     if (v.count < params_.min_points_per_voxel) continue;
     points.push_back(v.sum / v.count);
   }
@@ -1030,7 +989,8 @@ PlanarRegistrationResult PlanarRegistration::Align(
     //   dx = [dtx, dty, dyaw]
     //
     // dtx, dty are map-frame translation corrections.
-    // dyaw is a local/current-frame yaw correction because we use right update:
+    // dyaw is a local/current-frame yaw correction because we use right
+    // update:
     //
     //   R_new = R * dR
     //   t_new = t + dt

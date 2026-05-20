@@ -22,7 +22,7 @@ galo:
     # General node behavior shared by frontend and odometry components.
     # debug enables extra visualization/timing output.
     node:
-      debug: 0
+      debug: 1
       max_ground_map_frames: 6       # number of recent ground frames kept in the local map
       max_planar_map_frames: 6       # number of recent planar/non-ground frames kept in the local map
       imu_orientation_queue_size: 2000
@@ -68,6 +68,7 @@ galo:
       wheel_speed: "/FB/wheel_speed_feedback"           # wheel speed for deskew and prediction
       wheel_angle: "/FB/wangle_feedback"                # steering/wheel angle for prediction
       deskewed_cloud: "/GALO/deskewed_cloud"            # deskew -> frontend
+      deskewed_heartbeat: "/GALO/deskewed_cloud_heartbeat" # lightweight deskew publish-rate debug
       frame_features: "/GALO/frame_features"            # frontend -> odometry
       colored_cloud: "/GALO/colored_cloud"              # frontend segmentation debug output
       ground_patches: "/GALO/ground_patch_normals"      # frontend ground patch marker output
@@ -118,6 +119,7 @@ galo:
       min_time_epsilon: 0.000001
       relative_time_tolerance: 0.001
       azimuth_range_epsilon: 0.000001
+      max_speed_age: 0.5
 
     # Grid-based ground/non-ground segmentation in the frontend.
     ground_segmentation:
@@ -126,7 +128,7 @@ galo:
       max_range: 80.0
       ground_height_threshold: 0.35
       min_points_per_cell: 20
-      neighbor_radius: 2
+      neighbor_radius: 0
       min_neighbor_cells: 10
       ground_z_quantile: 0.25
       grid_reserve: 50000
