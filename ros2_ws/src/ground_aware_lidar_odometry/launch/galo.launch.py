@@ -1,8 +1,9 @@
 from launch import LaunchDescription
-from launch.actions import LogInfo
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.substitutions import LaunchConfiguration
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
 from ament_index_python.packages import get_package_share_directory
 import os
 import yaml
@@ -13,6 +14,11 @@ def generate_launch_description():
         'use_sim_time',
         default_value='false',
         description='Use simulation time if true'
+    )
+    declare_launch_static_tf = DeclareLaunchArgument(
+        'launch_static_tf',
+        default_value='false',
+        description='Launch static_tf_publisher/static_tf.launch.py if true'
     )
 
     # Path to the main configuration file. Load the parameter dictionary
@@ -27,6 +33,18 @@ def generate_launch_description():
 
     # Get the value of use_sim_time as a LaunchConfiguration
     use_sim_time = LaunchConfiguration('use_sim_time')
+    launch_static_tf = LaunchConfiguration('launch_static_tf')
+
+    static_tf_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("static_tf_publisher"),
+                "launch",
+                "static_tf.launch.py",
+            )
+        ),
+        condition=IfCondition(launch_static_tf),
+    )
 
     # Log the parameter file path (will be resolved at runtime)
     log_info = LogInfo(msg=["Using GALO params file: ", params_file])
@@ -67,7 +85,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
+        declare_launch_static_tf,
         log_info,
+        static_tf_launch,
         deskew_node,
         frontend_node,
         galo_node,
