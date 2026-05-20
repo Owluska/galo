@@ -1,6 +1,8 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 from ament_index_python.packages import get_package_share_directory
@@ -14,6 +16,11 @@ def generate_launch_description():
         default_value='false',
         description='Use simulation time if true'
     )
+    declare_launch_static_tf = DeclareLaunchArgument(
+        'launch_static_tf',
+        default_value='false',
+        description='Launch static_tf_publisher/static_tf.launch.py if true'
+    )
 
     params_file = os.path.join(
         get_package_share_directory("ground_aware_lidar_odometry"),
@@ -24,7 +31,19 @@ def generate_launch_description():
         galo_params = yaml.safe_load(f)["galo"]["ros__parameters"]
 
     use_sim_time = LaunchConfiguration('use_sim_time')
+    launch_static_tf = LaunchConfiguration('launch_static_tf')
     parameters = [galo_params, {"use_sim_time": use_sim_time}]
+
+    static_tf_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("static_tf_publisher"),
+                "launch",
+                "static_tf.launch.py",
+            )
+        ),
+        condition=IfCondition(launch_static_tf),
+    )
 
     container = ComposableNodeContainer(
         name="galo_container",
@@ -56,6 +75,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
+        declare_launch_static_tf,
         LogInfo(msg=["Using GALO params file: ", params_file]),
+        static_tf_launch,
         container,
     ])
