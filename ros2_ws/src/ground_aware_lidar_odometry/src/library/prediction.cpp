@@ -1,31 +1,104 @@
 #include "ground_aware_lidar_odometry/prediction.hpp"
 
+namespace {
+Eigen::Matrix3d RotationFromYaw(double yaw) {
+  const double c = std::cos(yaw);
+  const double s = std::sin(yaw);
+  Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+  R(0, 0) = c;
+  R(0, 1) = -s;
+  R(1, 0) = s;
+  R(1, 1) = c;
+  return R;
+}
+}  // namespace
+
 PredictedPose PositionPredictor::PredictFromWheelModel(
     const WheelSpeedAngleData& speed_data, const Eigen::Matrix3d& R_current,
     const Eigen::Vector3d& t_current, double prev_time, double curr_time) {
+  return PredictFromWheelModelImpl(speed_data, R_current, t_current, prev_time,
+                                   curr_time, true);
+}
+
+PredictedPose PositionPredictor::PredictFromWheelQueue(
+    const FiniteDeque<WheelSpeedAngleData>& wheel_queue,
+    const Eigen::Matrix3d& R_current, const Eigen::Vector3d& t_current,
+    double prev_time, double curr_time) {
   PredictedPose out;
   out.t = t_current;
   out.yaw = std::atan2(R_current(1, 0), R_current(0, 0));
-  out.speed = 0.5 * (speed_data.left_speed + speed_data.right_speed);
+  out.speed = has_prev_speed_ ? prev_speed_ : 0.0;
+
+  if (wheel_queue.Size() == 0) {
+    return out;
+  }
+
+  auto active = FindClosestByTime(
+      wheel_queue, prev_time,
+      [](const WheelSpeedAngleData& item) { return item.wheel_time; });
+  if (!active) {
+    return out;
+  }
+
+  double segment_start = prev_time;
+  for (const auto& sample : wheel_queue) {
+    if (!sample.has_wheel_data || sample.wheel_time <= prev_time) {
+      continue;
+    }
+    if (sample.wheel_time >= curr_time) {
+      break;
+    }
+
+    out = PredictFromWheelModelImpl(*active, RotationFromYaw(out.yaw), out.t,
+                                    segment_start, sample.wheel_time, true);
+    segment_start = sample.wheel_time;
+    active = sample;
+  }
+
+  out = PredictFromWheelModelImpl(*active, RotationFromYaw(out.yaw), out.t,
+                                  segment_start, curr_time, true);
+  return out;
+}
+
+PredictedPose PositionPredictor::PredictFromWheelModelImpl(
+    const WheelSpeedAngleData& speed_data, const Eigen::Matrix3d& R_current,
+    const Eigen::Vector3d& t_current, double prev_time, double curr_time,
+    bool enforce_max_dt) {
+  PredictedPose out;
+  out.t = t_current;
+  out.yaw = std::atan2(R_current(1, 0), R_current(0, 0));
+  out.speed = has_prev_speed_
+                  ? prev_speed_
+                  : 0.5 * (speed_data.left_speed + speed_data.right_speed);
 
   if (!speed_data.has_wheel_data) {
     return out;
   }
 
   const double dt = curr_time - prev_time;
-
-  if (dt <= params_.min_prediction_dt || dt > params_.max_prediction_dt) {
+  if (dt <= params_.min_prediction_dt) {
+    // that's okay - we don't need to update because last prediction is basicaly
+    // the same
+    return out;
+  }
+  if (enforce_max_dt && dt > params_.max_prediction_dt) {
+    RCLCPP_WARN(logger_,
+                "pose prediction failed because of wrong dt value %.4f", dt);
     return out;
   }
 
-  if (std::abs(curr_time - speed_data.wheel_time) >
+  if (std::abs(prev_time - speed_data.wheel_time) >
       params_.max_wheel_data_age) {
+    RCLCPP_WARN(logger_,
+                "pose prediction failed because wheel data is stalled %.1f",
+                std::abs(prev_time - speed_data.wheel_time));
     return out;
   }
 
   RearWheelSpeedResult res = EstimateRearAxleSpeed(speed_data);
-  out.speed = res.speed;
   if (!res.valid || std::abs(res.speed) < params_.min_valid_speed) {
+    RCLCPP_WARN(logger_,
+                "pose prediction failed because speed estimation is invalid");
     return out;
   }
 

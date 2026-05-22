@@ -40,17 +40,32 @@ struct PredictionParams {
 
 class PositionPredictor {
  public:
-  PositionPredictor(const PredictionParams& params) : params_(params) {}
+  PositionPredictor(const PredictionParams& params,
+                    const rclcpp::Logger& logger, const rclcpp::Clock& clock)
+      : logger_(logger), clock_(clock), params_(params) {}
   PredictedPose PredictFromWheelModel(const WheelSpeedAngleData& speed_data,
                                       const Eigen::Matrix3d& R_current,
                                       const Eigen::Vector3d& t_current,
                                       double prev_time, double curr_time);
 
+  PredictedPose PredictFromWheelQueue(
+      const FiniteDeque<WheelSpeedAngleData>& wheel_queue,
+      const Eigen::Matrix3d& R_current, const Eigen::Vector3d& t_current,
+      double prev_time, double curr_time);
+
   RearWheelSpeedResult EstimateRearAxleSpeed(
       const WheelSpeedAngleData& speed_data);
 
  private:
+  PredictedPose PredictFromWheelModelImpl(const WheelSpeedAngleData& speed_data,
+                                          const Eigen::Matrix3d& R_current,
+                                          const Eigen::Vector3d& t_current,
+                                          double prev_time, double curr_time,
+                                          bool enforce_max_dt);
+
   double prev_speed_ = 0;
   bool has_prev_speed_ = false;
+  rclcpp::Logger logger_;
+  rclcpp::Clock clock_;
   PredictionParams params_;
 };

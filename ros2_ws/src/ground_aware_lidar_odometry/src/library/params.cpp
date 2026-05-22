@@ -27,6 +27,8 @@ GaloOdometryParams GaloOdometryComponent::LoadNodeParams(rclcpp::Node& node) {
                             p.fallback_alpha_z_valid_ground);
   p.imu_orientation_queue_size = DeclareAndGet<int>(
       node, "node.imu_orientation_queue_size", p.imu_orientation_queue_size);
+  p.wheel_data_queue_size = DeclareAndGet<int>(
+      node, "node.wheel_data_queue_size", p.wheel_data_queue_size);
   p.min_gnss_quality =
       DeclareAndGet<int>(node, "node.min_gnss_quality", p.min_gnss_quality);
   p.gnss_yaw_position_max_dt = DeclareAndGet<double>(
@@ -200,6 +202,12 @@ GroundRegistrationParams GaloOdometryComponent::LoadGroundRegistrationParams(
       node, "ground_registration.max_condition_number", p.max_condition_number);
   p.convergence_eps = DeclareAndGet<double>(
       node, "ground_registration.convergence_eps", p.convergence_eps);
+  p.early_stop_worsen_rel_tol = DeclareAndGet<double>(
+      node, "ground_registration.early_stop_worsen_rel_tol",
+      p.early_stop_worsen_rel_tol);
+  p.early_stop_worsen_abs_tol = DeclareAndGet<double>(
+      node, "ground_registration.early_stop_worsen_abs_tol",
+      p.early_stop_worsen_abs_tol);
 
   return p;
 }
@@ -238,6 +246,12 @@ PlanarRegistrationParams GaloOdometryComponent::LoadPlanarRegistrationParams(
 
   p.convergence_eps = DeclareAndGet<double>(
       node, "planar_registration.convergence_eps", p.convergence_eps);
+  p.early_stop_worsen_rel_tol = DeclareAndGet<double>(
+      node, "planar_registration.early_stop_worsen_rel_tol",
+      p.early_stop_worsen_rel_tol);
+  p.early_stop_worsen_abs_tol = DeclareAndGet<double>(
+      node, "planar_registration.early_stop_worsen_abs_tol",
+      p.early_stop_worsen_abs_tol);
   p.grid_reserve = DeclareAndGet<int>(node, "planar_registration.grid_reserve",
                                       p.grid_reserve);
 

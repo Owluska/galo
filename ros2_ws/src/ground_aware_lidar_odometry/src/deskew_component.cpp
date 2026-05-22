@@ -20,7 +20,8 @@ GaloDeskewComponent::GaloDeskewComponent(const rclcpp::NodeOptions& options)
       params_(LoadParams(*this)),
       deskew_params_(LoadDeskewParams(*this)),
       prediction_params_(LoadPredictionParams(*this)),
-      position_predictor_(prediction_params_),
+      position_predictor_(prediction_params_, this->get_logger(),
+                          *this->get_clock()),
       deskew_algorithm_(deskew_params_, this->get_logger(),
                         *this->get_clock()) {
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
@@ -45,27 +46,24 @@ GaloDeskewComponent::GaloDeskewComponent(const rclcpp::NodeOptions& options)
       params_.imu_topic, 100,
       std::bind(&GaloDeskewComponent::ImuCb, this, std::placeholders::_1),
       sensor_options);
-  wheel_speed_sub_ =
-      this->create_subscription<common_msgs::msg::WheelSpeed>(
-          params_.wheel_speed_topic, 10,
-          std::bind(&GaloDeskewComponent::WheelSpeedCb, this,
-                    std::placeholders::_1),
-          sensor_options);
-  wheel_angle_sub_ =
-      this->create_subscription<qarl_msgs::msg::WAngleFeedback>(
-          params_.wheel_angle_topic, 10,
-          std::bind(&GaloDeskewComponent::WheelAngleCb, this,
-                    std::placeholders::_1),
-          sensor_options);
+  wheel_speed_sub_ = this->create_subscription<common_msgs::msg::WheelSpeed>(
+      params_.wheel_speed_topic, 10,
+      std::bind(&GaloDeskewComponent::WheelSpeedCb, this,
+                std::placeholders::_1),
+      sensor_options);
+  wheel_angle_sub_ = this->create_subscription<qarl_msgs::msg::WAngleFeedback>(
+      params_.wheel_angle_topic, 10,
+      std::bind(&GaloDeskewComponent::WheelAngleCb, this,
+                std::placeholders::_1),
+      sensor_options);
   deskew_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       params_.deskewed_cloud_topic, 1);
-  deskew_heartbeat_pub_ =
-      this->create_publisher<std_msgs::msg::Header>(
-          params_.deskewed_heartbeat_topic, 1);
+  deskew_heartbeat_pub_ = this->create_publisher<std_msgs::msg::Header>(
+      params_.deskewed_heartbeat_topic, 1);
 
-  RCLCPP_INFO(this->get_logger(),
-              "GALO deskew component: %s -> %s",
-              params_.lidar_topic.c_str(), params_.deskewed_cloud_topic.c_str());
+  RCLCPP_INFO(this->get_logger(), "GALO deskew component: %s -> %s",
+              params_.lidar_topic.c_str(),
+              params_.deskewed_cloud_topic.c_str());
 }
 
 void GaloDeskewComponent::LidarCb(
@@ -102,8 +100,8 @@ void GaloDeskewComponent::LidarCb(
 void GaloDeskewComponent::ImuCb(const sensor_msgs::msg::Imu::SharedPtr msg) {
   try {
     std::lock_guard<std::mutex> lock(mutex_);
-    deskew_algorithm_.UpdateImuQueue(
-        msg->angular_velocity.z, rclcpp::Time(msg->header.stamp).seconds());
+    deskew_algorithm_.UpdateImuQueue(msg->angular_velocity.z,
+                                     rclcpp::Time(msg->header.stamp).seconds());
   } catch (const std::exception& ex) {
     RCLCPP_ERROR(this->get_logger(), "Dropping IMU message: %s", ex.what());
   }
@@ -157,7 +155,8 @@ bool GaloDeskewComponent::EnsureLidarBodyTf() {
     has_lidar_body_tf_ = true;
   } catch (const tf2::TransformException& ex) {
     const auto now = std::chrono::steady_clock::now();
-    const auto throttle = std::chrono::milliseconds(deskew_params_.log_throttle);
+    const auto throttle =
+        std::chrono::milliseconds(deskew_params_.log_throttle);
     if (last_tf_warn_time_ == std::chrono::steady_clock::time_point{} ||
         now - last_tf_warn_time_ >= throttle) {
       last_tf_warn_time_ = now;

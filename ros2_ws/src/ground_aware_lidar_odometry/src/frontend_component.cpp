@@ -29,8 +29,7 @@ bool ShouldLogSteady(std::chrono::steady_clock::time_point& last_log_time,
 
 }  // namespace
 
-GaloFrontendComponent::GaloFrontendComponent(
-    const rclcpp::NodeOptions& options)
+GaloFrontendComponent::GaloFrontendComponent(const rclcpp::NodeOptions& options)
     : Node("galo_frontend", options),
       params_(LoadParams(*this)),
       segmentation_params_(LoadGroundSegmentationParams(*this)),
@@ -58,8 +57,7 @@ GaloFrontendComponent::GaloFrontendComponent(
       this->create_publisher<visualization_msgs::msg::MarkerArray>(
           params_.ground_patches_topic, 10);
 
-  RCLCPP_INFO(this->get_logger(),
-              "GALO frontend component: %s -> %s",
+  RCLCPP_INFO(this->get_logger(), "GALO frontend component: %s -> %s",
               params_.deskewed_cloud_topic.c_str(),
               params_.frame_features_topic.c_str());
 }
@@ -103,14 +101,16 @@ void GaloFrontendComponent::PrintTimeMeasurements(
   if (measurements.empty()) return;
 
   bool has_big_measurement = false;
-  for (const auto& measurement : measurements) {
-    if (GetDelayMs(measurement.start, measurement.end) >=
-        params_.elapsed_time_thresh) {
+  for (const auto& m : measurements) {
+    if (m.label.find("total") != std::string::npos) {
+      continue;
+    }
+    if (GetDelayMs(m.start, m.end) >= params_.elapsed_time_thresh) {
       has_big_measurement = true;
       break;
     }
   }
-  if (!params_.debug && !has_big_measurement) return;
+  if (!has_big_measurement) return;
 
   std::stringstream ss;
   ss << "Frontend time measurements (ms): ";
@@ -135,8 +135,8 @@ GaloFrontendComponent::Params GaloFrontendComponent::LoadParams(
   p.debug = DeclareAndGet<int>(node, "node.debug", p.debug);
   p.elapsed_time_thresh = DeclareAndGet<double>(
       node, "node.elapsed_time_thresh", p.elapsed_time_thresh);
-  p.log_throttle = DeclareAndGet<int>(
-      node, "node.registration_log_throttle", p.log_throttle);
+  p.log_throttle = DeclareAndGet<int>(node, "node.registration_log_throttle",
+                                      p.log_throttle);
   p.deskewed_cloud_topic = DeclareAndGet<std::string>(
       node, "topics.deskewed_cloud", p.deskewed_cloud_topic);
   p.frame_features_topic = DeclareAndGet<std::string>(
@@ -170,9 +170,9 @@ GroundSegmentationParams GaloFrontendComponent::LoadGroundSegmentationParams(
       node, "ground_segmentation.ground_z_quantile", p.ground_z_quantile);
   p.grid_reserve = DeclareAndGet<int>(node, "ground_segmentation.grid_reserve",
                                       p.grid_reserve);
-  p.smoothed_grid_reserve = DeclareAndGet<int>(
-      node, "ground_segmentation.smoothed_grid_reserve",
-      p.smoothed_grid_reserve);
+  p.smoothed_grid_reserve =
+      DeclareAndGet<int>(node, "ground_segmentation.smoothed_grid_reserve",
+                         p.smoothed_grid_reserve);
   return p;
 }
 
@@ -183,8 +183,8 @@ GroundPatchParams GaloFrontendComponent::LoadGroundPatchParams(
       DeclareAndGet<double>(node, "ground_patch.cell_size", p.cell_size);
   p.min_points =
       DeclareAndGet<int>(node, "ground_patch.min_points", p.min_points);
-  p.max_thickness = DeclareAndGet<double>(
-      node, "ground_patch.max_thickness", p.max_thickness);
+  p.max_thickness = DeclareAndGet<double>(node, "ground_patch.max_thickness",
+                                          p.max_thickness);
   p.min_normal_z =
       DeclareAndGet<double>(node, "ground_patch.min_normal_z", p.min_normal_z);
   p.max_surface_variation = DeclareAndGet<double>(

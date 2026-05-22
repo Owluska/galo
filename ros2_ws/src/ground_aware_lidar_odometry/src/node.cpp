@@ -1,9 +1,8 @@
 #include "ground_aware_lidar_odometry/node.hpp"
 
-#include "ground_aware_lidar_odometry/feature_conversions.hpp"
-
 #include <exception>
 
+#include "ground_aware_lidar_odometry/feature_conversions.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 
 namespace {
@@ -33,7 +32,8 @@ GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
                            *this->get_clock()),
       planar_registration_(planar_registration_params_, this->get_logger(),
                            *this->get_clock()),
-      position_predictor_(prediction_params_) {
+      position_predictor_(prediction_params_, this->get_logger(),
+                          *this->get_clock()) {
   imu_frame = node_params_.imu_frame;
   lidar_frame = node_params_.lidar_frame;
   pos_antena_frame = node_params_.pos_antenna_frame;
@@ -41,6 +41,7 @@ GaloOdometryComponent::GaloOdometryComponent(const rclcpp::NodeOptions& options)
   map_frame = node_params_.map_frame;
   body_frame = node_params_.body_frame;
   imu_orientation_queue_.Resize(node_params_.imu_orientation_queue_size);
+  wheel_data_queue_.Resize(node_params_.wheel_data_queue_size);
 
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -140,6 +141,10 @@ void GaloOdometryComponent::WheelSpeedCb(
   wheel_data.right_speed = msg->rear_right;
   wheel_data.wheel_time = rclcpp::Time(msg->header.stamp).seconds();
   wheel_data.has_wheel_data = true;
+  wheel_data_queue_.UpdateSorted(wheel_data, [](const WheelSpeedAngleData& a,
+                                                const WheelSpeedAngleData& b) {
+    return a.wheel_time < b.wheel_time;
+  });
   RearWheelSpeedResult speed_res =
       position_predictor_.EstimateRearAxleSpeed(wheel_data);
   (void)speed_res;
@@ -168,7 +173,7 @@ void GaloOdometryComponent::GnssCorrectionTimerCb() {
         RCLCPP_WARN(this->get_logger(),
                     "Waiting for GNSS position/yaw to correct LiDAR odometry");
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   } catch (const std::exception& ex) {
     RCLCPP_ERROR(this->get_logger(), "GNSS correction timer failed: %s",
@@ -427,13 +432,14 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
     PruneStaleMapFrames(lidar_time);
     RebuildGroundMap();
     RebuildObjectsMap();
-    RCLCPP_WARN(
-        this->get_logger(),
-        "Odometry gate: initialized first map frame, next frame should publish. "
-        "pose t=[%.3f %.3f %.3f], yaw=%.3f planar_points=%zu ground_patches=%zu",
-        t_map_lidar.x(), t_map_lidar.y(), t_map_lidar.z(),
-        std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0)),
-        features.planar_points.size(), features.ground_patches.size());
+    RCLCPP_WARN(this->get_logger(),
+                "Odometry gate: initialized first map frame, next frame should "
+                "publish. "
+                "pose t=[%.3f %.3f %.3f], yaw=%.3f planar_points=%zu "
+                "ground_patches=%zu",
+                t_map_lidar.x(), t_map_lidar.y(), t_map_lidar.z(),
+                std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0)),
+                features.planar_points.size(), features.ground_patches.size());
     return;
   }
   bool has_imu_history = false;
@@ -443,15 +449,17 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
     imu_queue_size = imu_orientation_queue_.Size();
     has_imu_history = imu_queue_size >= 2;
   }
-  const bool has_extrinsic = GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame);
+  const bool has_extrinsic =
+      GetExtrinsicTf(*tf_buffer_, imu_frame, lidar_frame);
   if (!has_extrinsic || !has_imu_history) {
     if (ShouldLogSteady(last_odometry_gate_warn_time_,
                         node_params_.registration_log_throttle)) {
       RCLCPP_WARN(this->get_logger(),
                   "Odometry gate: missing %s%s. lidar_time=%.6f imu_queue=%zu",
                   has_extrinsic ? "" : "TF/extrinsic",
-                  (!has_extrinsic && !has_imu_history) ? "+IMU history" :
-                      (has_imu_history ? "" : "IMU history"),
+                  (!has_extrinsic && !has_imu_history)
+                      ? "+IMU history"
+                      : (has_imu_history ? "" : "IMU history"),
                   lidar_time, imu_queue_size);
     }
     return;
@@ -525,16 +533,14 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
   pred.t = t_map_lidar;
   pred.yaw = std::atan2(R_map_lidar_(1, 0), R_map_lidar_(0, 0));
   pred.speed = 0.0;
-  WheelSpeedAngleData wheel_data_loc;
-  {
-    std::lock_guard<std::mutex> lock(mut_);
-    wheel_data_loc = wheel_data;
-  }
-
+  FiniteDeque<WheelSpeedAngleData> wheel_data_queue_loc;
   if (has_prev_lidar_pose_for_prediction_) {
-    std::lock_guard<std::mutex> lock(mut_);
-    pred = position_predictor_.PredictFromWheelModel(
-        wheel_data_loc, R_map_lidar_, t_map_lidar, prev_lidar_pose_time_,
+    {
+      std::lock_guard<std::mutex> lock(mut_);
+      wheel_data_queue_loc = wheel_data_queue_;
+    }
+    pred = position_predictor_.PredictFromWheelQueue(
+        wheel_data_queue_loc, R_map_lidar_, t_map_lidar, prev_lidar_pose_time_,
         lidar_time);
   }
 
@@ -563,7 +569,7 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
     if (ShouldLogSteady(last_registration_warn_time_,
                         node_params_.registration_log_throttle)) {
       RCLCPP_WARN(this->get_logger(),
-                  "Odometry gate: planar registration invalid. "
+                  "PLANAR REGISTRATION IS INVALID! Odometry gate: "
                   "planar_points=%zu map_points=%zu lidar_time=%.6f",
                   features.planar_points.size(), objects_map_.size(),
                   lidar_time);
@@ -598,16 +604,8 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
     meas.SetEnd();
     time_measurments.push_back(meas);
   }
-
-  if (!planar_reg_res.valid) {
-    if (ShouldLogSteady(last_registration_warn_time_,
-                        node_params_.registration_log_throttle)) {
-      RCLCPP_WARN(this->get_logger(),
-                  "Planar registration invalid, skipping odometry update");
-    }
-    return;
-  }
-  bool is_ground_ok = CheckGroundRegistration(ground_reg_result);
+  const double dt_ground_gate = lidar_time - prev_lidar_pose_time_;
+  bool is_ground_ok = CheckGroundRegistration(ground_reg_result, dt_ground_gate);
 
   Eigen::Matrix3d R_abs;
   Eigen::Vector3d t_abs;
@@ -621,11 +619,37 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
   } else {
     // Ground failed: trust planar x/y/yaw, keep previous z, take roll/pitch
     // from IMU prior.
-    RCLCPP_WARN(this->get_logger(),
-                "ground valid=%d matches=%d residual=%.3f dz=%.3f ok=%d",
-                ground_reg_result.valid, ground_reg_result.num_matches,
-                ground_reg_result.mean_abs_residual,
-                ground_reg_result.t.z() - t_map_lidar.z(), is_ground_ok);
+    double droll_rate_deg = std::numeric_limits<double>::infinity();
+    double dpitch_rate_deg = std::numeric_limits<double>::infinity();
+    double dz_rate = std::numeric_limits<double>::infinity();
+    if (std::isfinite(dt_ground_gate) && dt_ground_gate > 0.0) {
+      auto [roll_prev, pitch_prev, yaw_prev] =
+          EulersFromMatrixSimple(R_map_lidar_);
+      auto [roll_g, pitch_g, yaw_g] =
+          EulersFromMatrixSimple(ground_reg_result.R);
+      (void)yaw_prev;
+      (void)yaw_g;
+
+      const double droll = std::abs(std::atan2(std::sin(roll_g - roll_prev),
+                                              std::cos(roll_g - roll_prev)));
+      const double dpitch = std::abs(std::atan2(std::sin(pitch_g - pitch_prev),
+                                               std::cos(pitch_g - pitch_prev)));
+      droll_rate_deg = droll / dt_ground_gate * 180.0 / M_PI;
+      dpitch_rate_deg = dpitch / dt_ground_gate * 180.0 / M_PI;
+      dz_rate = std::abs(ground_reg_result.t.z() - t_map_lidar.z()) /
+                dt_ground_gate;
+    }
+    RCLCPP_WARN(
+        this->get_logger(),
+        "ground gate rejected: valid=%d matches=%d/%d residual=%.3f/%.3f "
+        "dt=%.3f droll=%.2f/%.2f deg/s dpitch=%.2f/%.2f deg/s "
+        "dz=%.3f/%.3f m/s",
+        ground_reg_result.valid, ground_reg_result.num_matches,
+        ground_reg_gate_params_.min_matches, ground_reg_result.mean_abs_residual,
+        ground_reg_gate_params_.max_residual, dt_ground_gate, droll_rate_deg,
+        ground_reg_gate_params_.max_droll, dpitch_rate_deg,
+        ground_reg_gate_params_.max_dpitch, dz_rate,
+        ground_reg_gate_params_.max_dz);
     double yaw = std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
 
     auto [roll_prior, pitch_prior, yaw_prior_unused] =
@@ -884,12 +908,15 @@ void GaloOdometryComponent::PrintTimeMeasurments(
   if (measurments.empty()) return;
   bool has_big_meas = false;
   for (const auto& m : measurments) {
+    if (m.label.find("total") != std::string::npos) {
+      continue;
+    }
     if (GetDelayMs(m.start, m.end) >= node_params_.elapsed_time_thresh) {
       has_big_meas = true;
       break;
     }
   }
-  if (!node_params_.debug && !has_big_meas) return;
+  if (!has_big_meas) return;
   std::stringstream ss;
   ss << "Time measurments (ms): ";
 
@@ -1011,12 +1038,13 @@ void GaloOdometryComponent::PruneStaleMapFrames(double current_time) {
   if (pruned_ground_frames > 0 || pruned_object_frames > 0) {
     if (ShouldLogSteady(last_prune_info_time_,
                         node_params_.registration_log_throttle)) {
-      RCLCPP_INFO(this->get_logger(),
-                  "Pruned stale map frames: ground=%zu objects=%zu "
-                  "threshold=%.1f ms remaining_ground=%zu remaining_objects=%zu",
-                  pruned_ground_frames, pruned_object_frames,
-                  node_params_.map_stale_threshold_ms, ground_map_frames_.size(),
-                  objects_map_frames_.size());
+      RCLCPP_INFO(
+          this->get_logger(),
+          "Pruned stale map frames: ground=%zu objects=%zu "
+          "threshold=%.1f ms remaining_ground=%zu remaining_objects=%zu",
+          pruned_ground_frames, pruned_object_frames,
+          node_params_.map_stale_threshold_ms, ground_map_frames_.size(),
+          objects_map_frames_.size());
     }
   }
 }
@@ -1089,19 +1117,27 @@ GaloOdometryComponent::BuildPoseWithCovarianceMsg(
 }
 
 bool GaloOdometryComponent::CheckGroundRegistration(
-    const GroundRegistrationResult& res) {
+    const GroundRegistrationResult& res, double dt) {
+  if (!std::isfinite(dt) || dt <= 0.0) {
+    return false;
+  }
+
   if (!res.valid || res.num_matches < ground_reg_gate_params_.min_matches ||
       res.mean_abs_residual > ground_reg_gate_params_.max_residual) {
     return false;
   }
   auto [roll_prev, pitch_prev, yaw_prev] = EulersFromMatrixSimple(R_map_lidar_);
   auto [roll_g, pitch_g, yaw_g] = EulersFromMatrixSimple(res.R);
+  (void)yaw_prev;
+  (void)yaw_g;
 
-  double droll = std::abs(
-      std::atan2(std::sin(roll_g - roll_prev), std::cos(roll_g - roll_prev)));
-  double dpitch = std::abs(std::atan2(std::sin(pitch_g - pitch_prev),
-                                      std::cos(pitch_g - pitch_prev)));
-  double dz = std::abs(res.t.z() - t_map_lidar.z());
+  const double droll = std::abs(std::atan2(std::sin(roll_g - roll_prev),
+                                          std::cos(roll_g - roll_prev))) /
+                       dt;
+  const double dpitch = std::abs(std::atan2(std::sin(pitch_g - pitch_prev),
+                                           std::cos(pitch_g - pitch_prev))) /
+                        dt;
+  const double dz = std::abs(res.t.z() - t_map_lidar.z()) / dt;
 
   return droll < DEG2RAD(ground_reg_gate_params_.max_droll) &&
          dpitch < DEG2RAD(ground_reg_gate_params_.max_dpitch) &&

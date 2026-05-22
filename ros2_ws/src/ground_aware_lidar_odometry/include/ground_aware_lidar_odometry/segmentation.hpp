@@ -82,6 +82,8 @@ struct GroundRegistrationParams {
   double min_condition_eigenvalue = 1e-4;
   double max_condition_number = 1e6;
   double convergence_eps = 1e-5;
+  double early_stop_worsen_rel_tol = 0.01;
+  double early_stop_worsen_abs_tol = 1e-9;
 };
 
 struct PlanarRegistrationParams {
@@ -101,6 +103,8 @@ struct PlanarRegistrationParams {
   double max_dyaw_step = 0.1;
 
   double convergence_eps = 1e-5;
+  double early_stop_worsen_rel_tol = 0.01;
+  double early_stop_worsen_abs_tol = 1e-9;
   int grid_reserve = 50000;
 };
 

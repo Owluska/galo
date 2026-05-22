@@ -92,6 +92,7 @@ struct GaloOdometryParams {
   double fallback_alpha_xy = 0.3;
   double fallback_alpha_z_valid_ground = 0.02;
   int imu_orientation_queue_size = 2000;
+  int wheel_data_queue_size = 10000;
   int min_gnss_quality = 4;
   double gnss_yaw_position_max_dt = 0.3;
   int initialization_log_throttle = 1000;
@@ -156,14 +157,15 @@ struct GnssData {
 struct GroundRegistrationGatePrms {
   int min_matches = 20;
   double max_residual = 0.35;
-  double max_droll = 5.0;   // deg
-  double max_dpitch = 5.0;  // deg
-  double max_dz = 1.0;      // m
+  double max_droll = 5.0;   // deg/s
+  double max_dpitch = 5.0;  // deg/s
+  double max_dz = 1.0;      // m/s
 };
 
 class GaloOdometryComponent : public rclcpp::Node {
  public:
-  explicit GaloOdometryComponent(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
+  explicit GaloOdometryComponent(
+      const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
 
  private:
   std::string imu_frame = "imu";
@@ -196,8 +198,8 @@ class GaloOdometryComponent : public rclcpp::Node {
   GnssLocalizationParams gnss_loc_params_;
   PredictionParams prediction_params_;
 
-  rclcpp::Subscription<ground_aware_lidar_odometry::msg::FrameFeatures>::SharedPtr
-      features_sub_;
+  rclcpp::Subscription<
+      ground_aware_lidar_odometry::msg::FrameFeatures>::SharedPtr features_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<qarl_msgs::msg::NmeaGGA>::SharedPtr gnss_sub_;
   rclcpp::Subscription<qarl_msgs::msg::WAngleFeedback>::SharedPtr wa_sub_;
@@ -237,6 +239,7 @@ class GaloOdometryComponent : public rclcpp::Node {
   Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
 
   FiniteDeque<ImuOrientationStamped> imu_orientation_queue_;
+  FiniteDeque<WheelSpeedAngleData> wheel_data_queue_;
   std::vector<TimeMeasurments_t> time_measurments;
   std::vector<GroundPatch> ground_map_;
   std::vector<Eigen::Vector2d> objects_map_;
@@ -291,7 +294,7 @@ class GaloOdometryComponent : public rclcpp::Node {
                                                const Eigen::Matrix2d& R_planar,
                                                double alpha_rp, double alpha_y);
   bool TryInitializeOdomFromGnss(bool force_correction = false);
-  bool CheckGroundRegistration(const GroundRegistrationResult& res);
+  bool CheckGroundRegistration(const GroundRegistrationResult& res, double dt);
 
   static GaloOdometryParams LoadNodeParams(rclcpp::Node& node);
   static GroundRegistrationParams LoadGroundRegistrationParams(

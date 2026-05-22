@@ -48,20 +48,27 @@ double Segmentation::GetNeighborGroundZ(const CellKey& key) const {
   }
   std::vector<double> zs;
   const int radius = params_.neighbor_radius;
+  const int side = 2 * radius + 1;
+  zs.reserve(side * side);
+
+  auto center_it = grid_.find(key);
+  if (center_it != grid_.end() && !std::isnan(center_it->second.min_z)) {
+    zs.emplace_back(center_it->second.min_z);
+  }
   for (int dx = -radius; dx <= radius; ++dx) {
     for (int dy = -radius; dy <= radius; ++dy) {
+      if (dx == 0 && dy == 0) continue;
       CellKey nk{key.x + dx, key.y + dy};
-
       auto it = grid_.find(nk);
       if (it == grid_.end() || std::isnan(it->second.min_z)) continue;
 
       const auto& cell = it->second;
 
-      zs.insert(zs.end(), cell.zs.begin(), cell.zs.end());
+      zs.emplace_back(cell.min_z);
     }
   }
 
-  if (zs.size() < params_.min_points_per_cell) {
+  if (zs.size() < params_.min_neighbor_cells) {
     return std::numeric_limits<double>::quiet_NaN();
   }
 
@@ -530,6 +537,16 @@ GroundRegistrationResult GroundRegistration::Align(
   Eigen::Matrix3d R = R_initial;
   Eigen::Vector3d t = t_initial;
 
+  struct GroundMatch {
+    Eigen::Vector3d cur_centroid;
+    Eigen::Vector3d map_centroid;
+    Eigen::Vector3d map_normal;
+    double weight = 1.0;
+  };
+
+  std::vector<GroundMatch> ground_matches;
+  ground_matches.reserve(current.size());
+
   int final_matches = 0;
   double final_abs_residual_sum = 0.0;
 
@@ -550,8 +567,11 @@ GroundRegistrationResult GroundRegistration::Align(
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
 
+    ground_matches.clear();
     int num_matches = 0;
     double abs_residual_sum = 0.0;
+    double weighted_cost_sum = 0.0;
+    double weight_sum = 0.0;
 
     double min_x = std::numeric_limits<double>::infinity();
     double max_x = -std::numeric_limits<double>::infinity();
@@ -680,8 +700,11 @@ GroundRegistrationResult GroundRegistration::Align(
       H += weight * J * J.transpose();
       b += weight * J * r;
 
+      ground_matches.push_back({cur.centroid, q, n, weight});
       ++num_matches;
       abs_residual_sum += std::abs(r);
+      weighted_cost_sum += weight * r * r;
+      weight_sum += weight;
     }
 
     if (num_matches < params_.min_matches) {
@@ -703,6 +726,8 @@ GroundRegistrationResult GroundRegistration::Align(
 
         H += params_.imu_roll_weight * J * J.transpose();
         b += params_.imu_roll_weight * J * r_roll;
+        weighted_cost_sum += params_.imu_roll_weight * r_roll * r_roll;
+        weight_sum += params_.imu_roll_weight;
       }
 
       {
@@ -712,6 +737,8 @@ GroundRegistrationResult GroundRegistration::Align(
 
         H += params_.imu_pitch_weight * J * J.transpose();
         b += params_.imu_pitch_weight * J * r_pitch;
+        weighted_cost_sum += params_.imu_pitch_weight * r_pitch * r_pitch;
+        weight_sum += params_.imu_pitch_weight;
       }
     }
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(H);
@@ -785,10 +812,8 @@ GroundRegistrationResult GroundRegistration::Align(
     dx(1) = std::clamp(dx(1), -params_.max_roll, params_.max_roll);
     dx(2) = std::clamp(dx(2), -params_.max_pitch, params_.max_pitch);
 
-    // Apply z correction in map frame.
-    //
-    // This optimizer does not update x/y translation.
-    t.z() += dx(0);
+    Eigen::Vector3d candidate_t = t;
+    candidate_t.z() += dx(0);
 
     // Apply right SO(3) update for local/body-frame roll-pitch correction.
     //
@@ -796,10 +821,54 @@ GroundRegistrationResult GroundRegistration::Align(
     //
     // Yaw correction is zero because yaw is handled by planar registration.
     Eigen::Vector3d dtheta(dx(1), dx(2), 0.0);
-    R = R * ExpSO3(dtheta);
+    Eigen::Matrix3d candidate_R = R * ExpSO3(dtheta);
 
+    const double current_cost = weight_sum > 0.0
+                                    ? weighted_cost_sum / weight_sum
+                                    : std::numeric_limits<double>::infinity();
+    double candidate_abs_residual_sum = 0.0;
+    double candidate_weighted_cost_sum = 0.0;
+    double candidate_weight_sum = 0.0;
+    for (const auto& match : ground_matches) {
+      const Eigen::Vector3d p = candidate_R * match.cur_centroid + candidate_t;
+      const double r = match.map_normal.dot(p - match.map_centroid);
+      candidate_abs_residual_sum += std::abs(r);
+      candidate_weighted_cost_sum += match.weight * r * r;
+      candidate_weight_sum += match.weight;
+    }
+    if (params_.use_imu_prior) {
+      Eigen::Matrix3d R_err = R_imu_prior.transpose() * candidate_R;
+      Eigen::Vector3d rot_err = LogSO3(R_err);
+      candidate_weighted_cost_sum +=
+          params_.imu_roll_weight * rot_err.x() * rot_err.x();
+      candidate_weighted_cost_sum +=
+          params_.imu_pitch_weight * rot_err.y() * rot_err.y();
+      candidate_weight_sum +=
+          params_.imu_roll_weight + params_.imu_pitch_weight;
+    }
+    const double candidate_cost =
+        candidate_weight_sum > 0.0
+            ? candidate_weighted_cost_sum / candidate_weight_sum
+            : std::numeric_limits<double>::infinity();
+
+    const double rel_tol = std::max(0.0, params_.early_stop_worsen_rel_tol);
+    const double abs_tol = std::max(0.0, params_.early_stop_worsen_abs_tol);
+    const bool worsened =
+        candidate_cost > current_cost * (1.0 + rel_tol) + abs_tol;
+
+    if (worsened) {
+      final_matches = num_matches;
+      final_abs_residual_sum = abs_residual_sum;
+      RCLCPP_DEBUG(logger_,
+                   "GroundRegistration::Align: early stop at iter %d, cost %.6f -> %.6f",
+                   iter, current_cost, candidate_cost);
+      break;
+    }
+
+    R = candidate_R;
+    t = candidate_t;
     final_matches = num_matches;
-    final_abs_residual_sum = abs_residual_sum;
+    final_abs_residual_sum = candidate_abs_residual_sum;
 
     if (dx.norm() < params_.convergence_eps) {
       break;
@@ -973,11 +1042,19 @@ PlanarRegistrationResult PlanarRegistration::Align(
   Eigen::Matrix2d R = R_initial;
   Eigen::Vector2d t = t_initial;
 
-  int final_matches = 0;
-  double final_residual_sum = 0.0;
-
   const double max_match_dist2 =
       params_.max_match_distance * params_.max_match_distance;
+
+  struct PlanarMatch {
+    Eigen::Vector2d cur_pt;
+    Eigen::Vector2d matched_pt;
+  };
+
+  std::vector<PlanarMatch> planar_matches;
+  planar_matches.reserve(current.size());
+
+  int final_matches = 0;
+  double final_residual_sum = 0.0;
 
   for (int iter = 0; iter < params_.max_iterations; ++iter) {
     // Normal equation system:
@@ -997,8 +1074,10 @@ PlanarRegistrationResult PlanarRegistration::Align(
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
 
+    planar_matches.clear();
     int num_matches = 0;
     double residual_sum = 0.0;
+    double cost_sum = 0.0;
 
     for (const auto& cur_pt : current) {
       // Transform current LiDAR-frame point into map frame using the current
@@ -1098,8 +1177,10 @@ PlanarRegistrationResult PlanarRegistration::Align(
       H += weight * J.transpose() * J;
       b += weight * J.transpose() * r;
 
+      planar_matches.push_back({cur_pt, matched_pt});
       ++num_matches;
       residual_sum += r.norm();
+      cost_sum += r.squaredNorm();
     }
 
     if (num_matches < params_.min_matches) {
@@ -1174,11 +1255,42 @@ PlanarRegistrationResult PlanarRegistration::Align(
     // This is consistent with the Jacobian above:
     //
     //   d(p_map) / dyaw = R * [-cur_pt.y, cur_pt.x]
-    R = R * dR;
-    t = t + dt;
+    Eigen::Matrix2d candidate_R = R * dR;
+    Eigen::Vector2d candidate_t = t + dt;
 
+    const double current_cost =
+        num_matches > 0 ? cost_sum / num_matches
+                        : std::numeric_limits<double>::infinity();
+    double candidate_residual_sum = 0.0;
+    double candidate_cost_sum = 0.0;
+    for (const auto& match : planar_matches) {
+      const Eigen::Vector2d p = candidate_R * match.cur_pt + candidate_t;
+      const Eigen::Vector2d r = p - match.matched_pt;
+      candidate_residual_sum += r.norm();
+      candidate_cost_sum += r.squaredNorm();
+    }
+    const double candidate_cost =
+        num_matches > 0 ? candidate_cost_sum / num_matches
+                        : std::numeric_limits<double>::infinity();
+
+    const double rel_tol = std::max(0.0, params_.early_stop_worsen_rel_tol);
+    const double abs_tol = std::max(0.0, params_.early_stop_worsen_abs_tol);
+    const bool worsened =
+        candidate_cost > current_cost * (1.0 + rel_tol) + abs_tol;
+
+    if (worsened) {
+      final_matches = num_matches;
+      final_residual_sum = residual_sum;
+      RCLCPP_DEBUG(logger_,
+                   "PlanarRegistration::Align: early stop at iter %d, cost %.6f -> %.6f",
+                   iter, current_cost, candidate_cost);
+      break;
+    }
+
+    R = candidate_R;
+    t = candidate_t;
     final_matches = num_matches;
-    final_residual_sum = residual_sum;
+    final_residual_sum = candidate_residual_sum;
 
     if (dx.norm() < params_.convergence_eps) {
       break;
