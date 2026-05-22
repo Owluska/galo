@@ -19,7 +19,7 @@ static_tf_publisher:
       right_srr:
         parent_frame: "base_link"
         translation: [2.0, -2.1, 1.3]
-        rotation_rpy: [3.14, 0.0, -1.57]
+        rotation_rpy: [1.57, 0.0, -1.57]
 
       left_srr:
         parent_frame: "base_link"
@@ -28,12 +28,12 @@ static_tf_publisher:
 
       rslidar:
         parent_frame: "base_link"
-        translation: [3.5, -0.1, 0.1]
-        rotation_rpy: [-0.005, -0.032, -0.029]
+        translation: [3.0, 0.3, 0.19]
+        rotation_rpy: [0.01, -0.02, -0.02]
 
       rear_base:
         parent_frame: "base_link"
-        translation: [-5.272, 0.0, 0.0]
+        translation: [-5.3, 0.0, 0.0]
         rotation_rpy: [0.0, 0.0, 0.0]
 
       pos_antenna:
@@ -51,6 +51,11 @@ static_tf_publisher:
         translation: [2.7, -0.1, 0.19]
         rotation_rpy: [-0.003, -0.025, 0.0]
 
+      leddar_0:
+        parent_frame: "rear_base"
+        translation: [-1.1, -0.21, 1.15]
+        rotation_rpy: [1.57, 0.39, 1.57]
+
       srr:
         parent_frame: "rear_base"
         translation: [-0.8, 0.0, 1.15]
@@ -58,10 +63,10 @@ static_tf_publisher:
 
       cepton:
         parent_frame: "rear_base"
-        translation: [-0.6, -0.15, 0.7]
-        rotation_rpy: [-0.217, -0.04, 1.58]
+        translation: [-0.6, 0.0, 1.25]
+        rotation_rpy: [-0.31, 0.0, 1.74]
 
-      cepton_10689:
+      cepton_9505:
         parent_frame: "cepton"
         translation: [0.0, 0.0, 0.0]
         rotation_rpy: [0.0, 0.0, 0.0]
