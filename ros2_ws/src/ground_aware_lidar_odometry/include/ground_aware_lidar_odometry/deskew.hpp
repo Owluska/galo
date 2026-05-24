@@ -77,6 +77,7 @@ struct DeskewParams {
   int imu_queue_size = 100;
   int lidar_queue_size = 10;
   int speed_queue_size = 10;
+  int num_threads = 0;
   double scan_period_ = 0.1;
   bool stamp_is_scan_end_ = true;
   int log_throttle = 2000;  // ms

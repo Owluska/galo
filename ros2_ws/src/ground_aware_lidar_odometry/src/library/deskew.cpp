@@ -1,6 +1,7 @@
 #include "ground_aware_lidar_odometry/deskew.hpp"
 
 #include <cstring>
+#include <omp.h>
 
 namespace {
 
@@ -238,6 +239,10 @@ std::optional<sensor_msgs::msg::PointCloud2> DeskewAlgorithm::DeskewCloud(
   const double min_time_epsilon = prms_.min_time_epsilon;
   const auto& imu_samples = input.imu_samples;
   const auto& speed_samples = input.speed_samples;
+
+  if (prms_.num_threads > 0) {
+    omp_set_num_threads(prms_.num_threads);
+  }
 
 #pragma omp parallel for schedule(static)
   for (std::ptrdiff_t signed_idx = 0; signed_idx < static_cast<std::ptrdiff_t>(n);

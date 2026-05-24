@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "common_msgs/msg/wheel_speed.hpp"
 #include "ground_aware_lidar_odometry/deskew.hpp"
@@ -34,6 +35,7 @@ class GaloDeskewComponent : public rclcpp::Node {
     std::string wheel_angle_topic = "/FB/wangle_feedback";
     std::string deskewed_cloud_topic = "/GALO/deskewed_cloud";
     std::string deskewed_heartbeat_topic = "/GALO/deskewed_cloud_heartbeat";
+    double elapsed_time_thresh = 50.0;
   };
 
   Params params_;
@@ -43,6 +45,7 @@ class GaloDeskewComponent : public rclcpp::Node {
   std::mutex mutex_;
   bool has_lidar_body_tf_ = false;
   std::chrono::steady_clock::time_point last_tf_warn_time_{};
+  std::chrono::steady_clock::time_point last_timing_info_time_{};
   double last_wheel_angle_ = 0.0;
   WheelSpeedAngleData wheel_data_;
   Eigen::Quaterniond q_lidar_body_ = Eigen::Quaterniond::Identity();
@@ -72,6 +75,8 @@ class GaloDeskewComponent : public rclcpp::Node {
   void WheelAngleCb(const qarl_msgs::msg::WAngleFeedback::SharedPtr msg);
 
   bool EnsureLidarBodyTf();
+  void PrintTimeMeasurements(
+      const std::vector<TimeMeasurments_t>& measurements);
 
   static Params LoadParams(rclcpp::Node& node);
   static DeskewParams LoadDeskewParams(rclcpp::Node& node);
