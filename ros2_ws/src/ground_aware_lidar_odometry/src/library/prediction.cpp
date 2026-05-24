@@ -17,7 +17,7 @@ PredictedPose PositionPredictor::PredictFromWheelModel(
     const WheelSpeedAngleData& speed_data, const Eigen::Matrix3d& R_current,
     const Eigen::Vector3d& t_current, double prev_time, double curr_time) {
   return PredictFromWheelModelImpl(speed_data, R_current, t_current, prev_time,
-                                   curr_time, true);
+                                   curr_time, true, R_current(2, 0));
 }
 
 PredictedPose PositionPredictor::PredictFromWheelQueue(
@@ -50,20 +50,22 @@ PredictedPose PositionPredictor::PredictFromWheelQueue(
     }
 
     out = PredictFromWheelModelImpl(*active, RotationFromYaw(out.yaw), out.t,
-                                    segment_start, sample.wheel_time, true);
+                                    segment_start, sample.wheel_time, true,
+                                    R_current(2, 0));
     segment_start = sample.wheel_time;
     active = sample;
   }
 
   out = PredictFromWheelModelImpl(*active, RotationFromYaw(out.yaw), out.t,
-                                  segment_start, curr_time, true);
+                                  segment_start, curr_time, true,
+                                  R_current(2, 0));
   return out;
 }
 
 PredictedPose PositionPredictor::PredictFromWheelModelImpl(
     const WheelSpeedAngleData& speed_data, const Eigen::Matrix3d& R_current,
     const Eigen::Vector3d& t_current, double prev_time, double curr_time,
-    bool enforce_max_dt) {
+    bool enforce_max_dt, double forward_z) {
   PredictedPose out;
   out.t = t_current;
   out.yaw = std::atan2(R_current(1, 0), R_current(0, 0));
@@ -116,8 +118,21 @@ PredictedPose PositionPredictor::PredictFromWheelModelImpl(
   const double dyaw = yaw_rate * dt;
   const double yaw_mid = out.yaw + 0.5 * dyaw;
   out.speed = speed;
-  out.t.x() += speed * dt * std::cos(yaw_mid);
-  out.t.y() += speed * dt * std::sin(yaw_mid);
+  const double ds = speed * dt;
+  out.t.x() += ds * std::cos(yaw_mid);
+  out.t.y() += ds * std::sin(yaw_mid);
+
+  if (params_.use_pitch_for_z) {
+    const double z_unit = std::clamp(forward_z, -1.0, 1.0);
+    const double z_gain = std::clamp(params_.pitch_z_gain, 0.0, 1.0);
+    double dz = z_gain * ds * z_unit;
+    if (params_.max_vertical_speed > 0.0) {
+      const double max_dz = params_.max_vertical_speed * dt;
+      dz = std::clamp(dz, -max_dz, max_dz);
+    }
+    out.t.z() += dz;
+  }
+
   out.yaw = NormalizeAngle(out.yaw + dyaw);
 
   prev_speed_ = speed;

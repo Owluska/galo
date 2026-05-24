@@ -36,6 +36,9 @@ struct PredictionParams {
   double max_wheel_data_age = 0.3;
   double min_valid_speed = 0.05;
   double max_steering_correction = 0.5;
+  bool use_pitch_for_z = false;
+  double pitch_z_gain = 0.2;
+  double max_vertical_speed = 0.5;
 };
 
 class PositionPredictor {
@@ -61,7 +64,7 @@ class PositionPredictor {
                                           const Eigen::Matrix3d& R_current,
                                           const Eigen::Vector3d& t_current,
                                           double prev_time, double curr_time,
-                                          bool enforce_max_dt);
+                                          bool enforce_max_dt, double forward_z);
 
   double prev_speed_ = 0;
   bool has_prev_speed_ = false;

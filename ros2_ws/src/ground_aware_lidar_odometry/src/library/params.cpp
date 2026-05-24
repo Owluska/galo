@@ -12,19 +12,21 @@ GaloOdometryParams GaloOdometryComponent::LoadNodeParams(rclcpp::Node& node) {
       node, "node.max_planar_map_frames", p.max_planar_map_frames);
   p.map_stale_threshold_ms = DeclareAndGet<double>(
       node, "node.map_stale_threshold_ms", p.map_stale_threshold_ms);
-  p.merge_alpha_xy =
-      DeclareAndGet<double>(node, "pose_merge.alpha_xy", p.merge_alpha_xy);
-  p.merge_alpha_z =
-      DeclareAndGet<double>(node, "pose_merge.alpha_z", p.merge_alpha_z);
-  p.merge_alpha_rp =
-      DeclareAndGet<double>(node, "pose_merge.alpha_rp", p.merge_alpha_rp);
-  p.merge_alpha_yaw =
-      DeclareAndGet<double>(node, "pose_merge.alpha_yaw", p.merge_alpha_yaw);
-  p.fallback_alpha_xy = DeclareAndGet<double>(
-      node, "pose_merge.fallback_alpha_xy", p.fallback_alpha_xy);
-  p.fallback_alpha_z_valid_ground =
-      DeclareAndGet<double>(node, "pose_merge.fallback_alpha_z_valid_ground",
-                            p.fallback_alpha_z_valid_ground);
+  p.pose_smoothing.alpha_xy = DeclareAndGet<double>(
+      node, "pose_merge.smoothing.alpha_xy", p.pose_smoothing.alpha_xy);
+  p.pose_smoothing.alpha_z = DeclareAndGet<double>(
+      node, "pose_merge.smoothing.alpha_z", p.pose_smoothing.alpha_z);
+  p.pose_smoothing.alpha_rp = DeclareAndGet<double>(
+      node, "pose_merge.smoothing.alpha_rp", p.pose_smoothing.alpha_rp);
+  p.pose_smoothing.alpha_yaw = DeclareAndGet<double>(
+      node, "pose_merge.smoothing.alpha_yaw", p.pose_smoothing.alpha_yaw);
+  p.fallback_merge.alpha_xy = DeclareAndGet<double>(
+      node, "pose_merge.fallback.alpha_xy", p.fallback_merge.alpha_xy);
+  p.fallback_merge.alpha_yaw = DeclareAndGet<double>(
+      node, "pose_merge.fallback.alpha_yaw", p.fallback_merge.alpha_yaw);
+  p.fallback_merge.alpha_z_valid_ground = DeclareAndGet<double>(
+      node, "pose_merge.fallback.alpha_z_valid_ground",
+      p.fallback_merge.alpha_z_valid_ground);
   p.imu_orientation_queue_size = DeclareAndGet<int>(
       node, "node.imu_orientation_queue_size", p.imu_orientation_queue_size);
   p.wheel_data_queue_size = DeclareAndGet<int>(
@@ -47,6 +49,10 @@ GaloOdometryParams GaloOdometryComponent::LoadNodeParams(rclcpp::Node& node) {
   p.gnss_correction_period_sec =
       DeclareAndGet<double>(node, "node.gnss_correction_period_sec",
                             p.gnss_correction_period_sec);
+  p.odom_error_csv_enabled = DeclareAndGet<bool>(
+      node, "node.odom_error_csv_enabled", p.odom_error_csv_enabled);
+  p.odom_error_csv_path = DeclareAndGet<std::string>(
+      node, "node.odom_error_csv_path", p.odom_error_csv_path);
 
   p.imu_frame =
       DeclareAndGet<std::string>(node, "frames.imu_frame", p.imu_frame);
@@ -281,6 +287,12 @@ PredictionParams GaloOdometryComponent::LoadPredictionParams(rclcpp::Node& node)
                                             p.min_valid_speed);
   p.max_steering_correction = DeclareAndGet<double>(
       node, "prediction.max_steering_correction", p.max_steering_correction);
+  p.use_pitch_for_z = DeclareAndGet<bool>(
+      node, "prediction.use_pitch_for_z", p.use_pitch_for_z);
+  p.pitch_z_gain =
+      DeclareAndGet<double>(node, "prediction.pitch_z_gain", p.pitch_z_gain);
+  p.max_vertical_speed = DeclareAndGet<double>(
+      node, "prediction.max_vertical_speed", p.max_vertical_speed);
 
   return p;
 }
