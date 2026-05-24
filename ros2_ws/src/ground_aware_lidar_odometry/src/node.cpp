@@ -2,6 +2,9 @@
 
 #include <exception>
 
+#include <algorithm>
+#include <iomanip>
+
 #include "ground_aware_lidar_odometry/feature_conversions.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 
@@ -16,6 +19,22 @@ bool ShouldLogSteady(std::chrono::steady_clock::time_point& last_log_time,
     return true;
   }
   return false;
+}
+
+Pose6D MakePose6D(const Eigen::Matrix3d& R, const Eigen::Vector3d& t) {
+  auto [roll, pitch, yaw] = EulersFromMatrixSimple(R);
+  Pose6D pose;
+  pose.x = t.x();
+  pose.y = t.y();
+  pose.z = t.z();
+  pose.roll = roll;
+  pose.pitch = pitch;
+  pose.yaw = yaw;
+  return pose;
+}
+
+std::array<double, 6> PoseToArray(const Pose6D& pose) {
+  return {pose.x, pose.y, pose.z, pose.roll, pose.pitch, pose.yaw};
 }
 }  // namespace
 
@@ -331,6 +350,9 @@ void GaloOdometryComponent::GnssYawCb(
     gnss_data_.yaw_time = yaw_time;
     latest_R_base_ = R_gt;
     has_latest_R_base_ = true;
+    latest_gt_pose_ = MakePose6D(R_gt, t_gt);
+    latest_gt_pose_time_ = yaw_time;
+    has_latest_gt_pose_ = true;
   }
 }
 
@@ -605,20 +627,23 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
     time_measurments.push_back(meas);
   }
   const double dt_ground_gate = lidar_time - prev_lidar_pose_time_;
-  bool is_ground_ok = CheckGroundRegistration(ground_reg_result, dt_ground_gate);
+  bool is_ground_ok =
+      CheckGroundRegistration(ground_reg_result, dt_ground_gate);
 
   Eigen::Matrix3d R_abs;
   Eigen::Vector3d t_abs;
   if (is_ground_ok) {
-    R_abs = MergeGroundAndPlanarRotation(
-        ground_reg_result.R, R_map_lidar_, planar_reg_res.R,
-        node_params_.merge_alpha_rp, node_params_.merge_alpha_yaw);
+    R_abs = MergeGroundAndPlanarRotation(ground_reg_result.R, R_map_lidar_,
+                                         planar_reg_res.R,
+                                         node_params_.pose_smoothing.alpha_rp,
+                                         node_params_.pose_smoothing.alpha_yaw);
     t_abs = MergeGroundAndPlanarTranslation(
         ground_reg_result.t, pred.t, planar_reg_res.t,
-        node_params_.merge_alpha_xy, node_params_.merge_alpha_z);
+        node_params_.pose_smoothing.alpha_xy,
+        node_params_.pose_smoothing.alpha_z);
   } else {
-    // Ground failed: trust planar x/y/yaw, keep previous z, take roll/pitch
-    // from IMU prior.
+    // Ground failed: blend planar x/y/yaw with prediction, use predicted z
+    // as the fallback prior, and take roll/pitch from IMU prior.
     double droll_rate_deg = std::numeric_limits<double>::infinity();
     double dpitch_rate_deg = std::numeric_limits<double>::infinity();
     double dz_rate = std::numeric_limits<double>::infinity();
@@ -631,33 +656,34 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
       (void)yaw_g;
 
       const double droll = std::abs(std::atan2(std::sin(roll_g - roll_prev),
-                                              std::cos(roll_g - roll_prev)));
-      const double dpitch = std::abs(std::atan2(std::sin(pitch_g - pitch_prev),
-                                               std::cos(pitch_g - pitch_prev)));
+                                               std::cos(roll_g - roll_prev)));
+      const double dpitch = std::abs(std::atan2(
+          std::sin(pitch_g - pitch_prev), std::cos(pitch_g - pitch_prev)));
       droll_rate_deg = droll / dt_ground_gate * 180.0 / M_PI;
       dpitch_rate_deg = dpitch / dt_ground_gate * 180.0 / M_PI;
-      dz_rate = std::abs(ground_reg_result.t.z() - t_map_lidar.z()) /
-                dt_ground_gate;
+      dz_rate =
+          std::abs(ground_reg_result.t.z() - t_map_lidar.z()) / dt_ground_gate;
+      RCLCPP_WARN(
+          this->get_logger(),
+          "ground gate rejected: valid=%d matches=%d/%d residual=%.3f/%.3f "
+          "dt=%.3f droll=%.2f/%.2f deg/s dpitch=%.2f/%.2f deg/s "
+          "dz=%.3f/%.3f m/s",
+          ground_reg_result.valid, ground_reg_result.num_matches,
+          ground_reg_gate_params_.min_matches,
+          ground_reg_result.mean_abs_residual,
+          ground_reg_gate_params_.max_residual, dt_ground_gate, droll_rate_deg,
+          ground_reg_gate_params_.max_droll, dpitch_rate_deg,
+          ground_reg_gate_params_.max_dpitch, dz_rate,
+          ground_reg_gate_params_.max_dz);
     }
-    RCLCPP_WARN(
-        this->get_logger(),
-        "ground gate rejected: valid=%d matches=%d/%d residual=%.3f/%.3f "
-        "dt=%.3f droll=%.2f/%.2f deg/s dpitch=%.2f/%.2f deg/s "
-        "dz=%.3f/%.3f m/s",
-        ground_reg_result.valid, ground_reg_result.num_matches,
-        ground_reg_gate_params_.min_matches, ground_reg_result.mean_abs_residual,
-        ground_reg_gate_params_.max_residual, dt_ground_gate, droll_rate_deg,
-        ground_reg_gate_params_.max_droll, dpitch_rate_deg,
-        ground_reg_gate_params_.max_dpitch, dz_rate,
-        ground_reg_gate_params_.max_dz);
-    double yaw = std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
-
+    const double yaw_planar =
+        std::atan2(planar_reg_res.R(1, 0), planar_reg_res.R(0, 0));
+    // const double yaw = pred.yaw + node_params_.fallback_merge.alpha_yaw *
+    //                                   NormalizeAngle(yaw_planar - pred.yaw);
+    const double yaw = yaw_planar;
     auto [roll_prior, pitch_prior, yaw_prior_unused] =
         EulersFromMatrixSimple(R_imu_prior_map);
     (void)yaw_prior_unused;
-    // auto [roll_prior, pitch_prior, yaw_prior_unused] =
-    //     EulersFromMatrixSimple(R_map_lidar_);
-    // (void)yaw_prior_unused;
 
     R_abs =
         Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix() *
@@ -666,14 +692,14 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
         Eigen::AngleAxisd(roll_prior, Eigen::Vector3d::UnitX())
             .toRotationMatrix();
 
-    const double alpha_xy = node_params_.fallback_alpha_xy;
-    const double alpha_z = ground_reg_result.valid
-                               ? node_params_.fallback_alpha_z_valid_ground
-                               : 0.0;
+    const double alpha_xy = node_params_.fallback_merge.alpha_xy;
+    const double alpha_z =
+        ground_reg_result.valid
+            ? node_params_.fallback_merge.alpha_z_valid_ground
+            : 0.0;
     t_abs.x() = pred.t.x() + alpha_xy * (planar_reg_res.t.x() - pred.t.x());
     t_abs.y() = pred.t.y() + alpha_xy * (planar_reg_res.t.y() - pred.t.y());
-    t_abs.z() =
-        t_map_lidar.z() + alpha_z * (ground_reg_result.t.z() - t_map_lidar.z());
+    t_abs.z() = pred.t.z() + alpha_z * (ground_reg_result.t.z() - pred.t.z());
   }
   R_map_lidar_ = R_abs;
   t_map_lidar = t_abs;
@@ -738,6 +764,97 @@ void GaloOdometryComponent::EstimatePoseFromFeatures(
   eulers_msg.y = pitch_abs;
   eulers_msg.z = yaw_abs;
   est_eulers_pub_->publish(eulers_msg);
+
+  DumpOdometryErrorCsvRow(features.header.stamp, R_map_base_est,
+                          t_map_base_est);
+}
+
+bool GaloOdometryComponent::OpenOdometryErrorCsvIfNeeded() {
+  if (!node_params_.odom_error_csv_enabled) {
+    return false;
+  }
+  if (odom_error_csv_.is_open()) {
+    return true;
+  }
+  if (odom_error_csv_open_failed_) {
+    return false;
+  }
+
+  odom_error_csv_.open(node_params_.odom_error_csv_path, std::ios::out);
+  if (!odom_error_csv_) {
+    odom_error_csv_open_failed_ = true;
+    RCLCPP_ERROR(this->get_logger(),
+                 "Failed to open odometry error CSV: %s",
+                 node_params_.odom_error_csv_path.c_str());
+    return false;
+  }
+
+  odom_error_csv_
+      << "odom_time,gt_time"
+      << ",gt_x,gt_y,gt_z,gt_roll,gt_pitch,gt_yaw"
+      << ",odom_x,odom_y,odom_z,odom_roll,odom_pitch,odom_yaw"
+      << ",error_x,error_y,error_z,error_roll,error_pitch,error_yaw"
+      << ",min_error_x,min_error_y,min_error_z,min_error_roll,min_error_pitch,min_error_yaw"
+      << ",max_error_x,max_error_y,max_error_z,max_error_roll,max_error_pitch,max_error_yaw\n";
+  odom_error_csv_ << std::fixed << std::setprecision(9);
+  RCLCPP_INFO(this->get_logger(), "Writing odometry error CSV: %s",
+              node_params_.odom_error_csv_path.c_str());
+  return true;
+}
+
+void GaloOdometryComponent::DumpOdometryErrorCsvRow(
+    const builtin_interfaces::msg::Time& stamp, const Eigen::Matrix3d& R_odom,
+    const Eigen::Vector3d& t_odom) {
+  if (!node_params_.odom_error_csv_enabled) {
+    return;
+  }
+
+  Pose6D gt_pose;
+  double gt_time = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(mut_);
+    if (!has_latest_gt_pose_) {
+      return;
+    }
+    gt_pose = latest_gt_pose_;
+    gt_time = latest_gt_pose_time_;
+  }
+
+  if (!OpenOdometryErrorCsvIfNeeded()) {
+    return;
+  }
+
+  const Pose6D odom_pose = MakePose6D(R_odom, t_odom);
+  const auto gt = PoseToArray(gt_pose);
+  const auto odom = PoseToArray(odom_pose);
+  std::array<double, 6> error{};
+  for (size_t i = 0; i < error.size(); ++i) {
+    error[i] = odom[i] - gt[i];
+  }
+  error[3] = NormalizeAngle(error[3]);
+  error[4] = NormalizeAngle(error[4]);
+  error[5] = NormalizeAngle(error[5]);
+
+  if (!odom_error_stats_.initialized) {
+    odom_error_stats_.min = error;
+    odom_error_stats_.max = error;
+    odom_error_stats_.initialized = true;
+  } else {
+    for (size_t i = 0; i < error.size(); ++i) {
+      odom_error_stats_.min[i] = std::min(odom_error_stats_.min[i], error[i]);
+      odom_error_stats_.max[i] = std::max(odom_error_stats_.max[i], error[i]);
+    }
+  }
+
+  const double odom_time = rclcpp::Time(stamp).seconds();
+  odom_error_csv_ << odom_time << ',' << gt_time;
+  for (const double v : gt) odom_error_csv_ << ',' << v;
+  for (const double v : odom) odom_error_csv_ << ',' << v;
+  for (const double v : error) odom_error_csv_ << ',' << v;
+  for (const double v : odom_error_stats_.min) odom_error_csv_ << ',' << v;
+  for (const double v : odom_error_stats_.max) odom_error_csv_ << ',' << v;
+  odom_error_csv_ << '\n';
+  odom_error_csv_.flush();
 }
 
 bool GaloOdometryComponent::GetTransformation(tf2_ros::Buffer& tf_buffer,
@@ -1132,10 +1249,10 @@ bool GaloOdometryComponent::CheckGroundRegistration(
   (void)yaw_g;
 
   const double droll = std::abs(std::atan2(std::sin(roll_g - roll_prev),
-                                          std::cos(roll_g - roll_prev))) /
+                                           std::cos(roll_g - roll_prev))) /
                        dt;
   const double dpitch = std::abs(std::atan2(std::sin(pitch_g - pitch_prev),
-                                           std::cos(pitch_g - pitch_prev))) /
+                                            std::cos(pitch_g - pitch_prev))) /
                         dt;
   const double dz = std::abs(res.t.z() - t_map_lidar.z()) / dt;
 

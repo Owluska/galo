@@ -193,6 +193,8 @@ GroundPatchParams GaloFrontendComponent::LoadGroundPatchParams(
       DeclareAndGet<int>(node, "ground_patch.patch_reserve", p.patch_reserve);
   p.valid_patch_reserve = DeclareAndGet<int>(
       node, "ground_patch.valid_patch_reserve", p.valid_patch_reserve);
+  p.num_threads =
+      DeclareAndGet<int>(node, "ground_patch.num_threads", p.num_threads);
   p.marker_normal_scale = DeclareAndGet<double>(
       node, "ground_patch.marker_normal_scale", p.marker_normal_scale);
   p.marker_shaft_diameter = DeclareAndGet<double>(

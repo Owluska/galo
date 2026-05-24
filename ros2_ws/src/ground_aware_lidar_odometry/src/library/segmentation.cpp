@@ -1,4 +1,9 @@
 #include "ground_aware_lidar_odometry/segmentation.hpp"
+
+#include <omp.h>
+
+#include <iterator>
+
 std::pair<int, int> Segmentation::GetIndexes(float x, float y) const {
   int ix = static_cast<int>(std::floor(x / params_.cell_size));
   int iy = static_cast<int>(std::floor(y / params_.cell_size));
@@ -234,57 +239,85 @@ std::vector<GroundPatch> GroundPatchExtractor::Extract(
     auto [ix, iy] = GetIndexes(x, y);
     CellKey key{ix, iy};
     PatchCell& cell = patches_[key];
-    cell.AddPoint(Eigen::Vector3d(x, y, z));
+    cell.AddPoint(x, y, z);
   }
 
-  for (const auto& [key, patch_cell] : patches_) {
-    const int N = patch_cell.count;
-    if (N < params_.min_points) continue;
+  std::vector<const std::pair<const CellKey, PatchCell>*> patch_entries;
+  patch_entries.reserve(patches_.size());
+  for (const auto& entry : patches_) {
+    patch_entries.push_back(&entry);
+  }
 
-    const double inv_N = 1.0 / static_cast<double>(N);
+  if (params_.num_threads > 0) {
+    omp_set_num_threads(params_.num_threads);
+  }
 
-    Eigen::Vector3d mean = patch_cell.sum * inv_N;
+#pragma omp parallel
+  {
+    std::vector<GroundPatch> local_valid_patches;
+    local_valid_patches.reserve(patch_entries.size() /
+                                    static_cast<size_t>(omp_get_num_threads()) +
+                                1);
 
-    Eigen::Matrix3d cov =
-        patch_cell.sum_outer * inv_N - mean * mean.transpose();
+#pragma omp for schedule(static)
+    for (std::ptrdiff_t signed_idx = 0;
+         signed_idx < static_cast<std::ptrdiff_t>(patch_entries.size());
+         ++signed_idx) {
+      const auto& [key, patch_cell] =
+          *patch_entries[static_cast<size_t>(signed_idx)];
+      const int N = patch_cell.count;
+      if (N < params_.min_points) continue;
 
-    cov = 0.5 * (cov + cov.transpose());  // numerical safety
+      const double inv_N = 1.0 / static_cast<double>(N);
 
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(cov);
-    if (solver.info() != Eigen::Success) continue;
+      Eigen::Vector3d mean = patch_cell.sum * inv_N;
 
-    Eigen::Vector3d eigenvalues = solver.eigenvalues();
-    Eigen::Matrix3d eigenvectors = solver.eigenvectors();
+      Eigen::Matrix3d cov =
+          patch_cell.SumOuter() * inv_N - mean * mean.transpose();
 
-    Eigen::Vector3d normal = eigenvectors.col(0);
-    if (normal.z() < 0.0) normal = -normal;
+      cov = 0.5 * (cov + cov.transpose());  // numerical safety
 
-    Eigen::Vector3d centroid = mean;
+      Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(cov);
+      if (solver.info() != Eigen::Success) continue;
 
-    double lambda0 = std::max(0.0, eigenvalues(0));
-    double lambda1 = std::max(0.0, eigenvalues(1));
-    double lambda2 = std::max(1e-12, eigenvalues(2));
+      Eigen::Vector3d eigenvalues = solver.eigenvalues();
+      Eigen::Matrix3d eigenvectors = solver.eigenvectors();
 
-    double thickness = std::sqrt(lambda0);
-    if (thickness > params_.max_thickness) continue;
-    if (normal.z() < params_.min_normal_z) continue;
+      Eigen::Vector3d normal = eigenvectors.col(0);
+      if (normal.z() < 0.0) normal = -normal;
 
-    double sum_lambda = lambda0 + lambda1 + lambda2 + 1e-12;
-    double surface_variation = lambda0 / sum_lambda;
+      Eigen::Vector3d centroid = mean;
 
-    if (surface_variation > params_.max_surface_variation) continue;
+      double lambda0 = std::max(0.0, eigenvalues(0));
+      double lambda1 = std::max(0.0, eigenvalues(1));
+      double lambda2 = std::max(1e-12, eigenvalues(2));
 
-    GroundPatch patch;
-    patch.centroid = centroid;
-    patch.normal = normal;
-    patch.covariance = cov;
-    patch.time = patch_time;
-    patch.support = N;
-    patch.weight = static_cast<double>(N);
-    patch.surface_variation = surface_variation;
-    patch.key = key;
+      double thickness = std::sqrt(lambda0);
+      if (thickness > params_.max_thickness) continue;
+      if (normal.z() < params_.min_normal_z) continue;
 
-    valid_patches_.push_back(patch);
+      double sum_lambda = lambda0 + lambda1 + lambda2 + 1e-12;
+      double surface_variation = lambda0 / sum_lambda;
+
+      if (surface_variation > params_.max_surface_variation) continue;
+
+      GroundPatch patch;
+      patch.centroid = centroid;
+      patch.normal = normal;
+      patch.covariance = cov;
+      patch.time = patch_time;
+      patch.support = N;
+      patch.weight = static_cast<double>(N);
+      patch.surface_variation = surface_variation;
+      patch.key = key;
+
+      local_valid_patches.push_back(std::move(patch));
+    }
+
+#pragma omp critical
+    valid_patches_.insert(valid_patches_.end(),
+                          std::make_move_iterator(local_valid_patches.begin()),
+                          std::make_move_iterator(local_valid_patches.end()));
   }
   return valid_patches_;
 }

@@ -4,8 +4,11 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <chrono>
+#include <array>
 #include <deque>
+#include <fstream>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -81,16 +84,25 @@ struct LidarCovariance {
   }
 };
 
+struct PoseSmoothingParams {
+  double alpha_xy = 0.3;
+  double alpha_z = 0.3;
+  double alpha_rp = 0.2;
+  double alpha_yaw = 0.8;
+};
+
+struct FallbackPoseMergeParams {
+  double alpha_xy = 0.3;
+  double alpha_yaw = 0.3;
+  double alpha_z_valid_ground = 0.02;
+};
+
 struct GaloOdometryParams {
   int debug = 1;
   int max_ground_map_frames = 10;
   int max_planar_map_frames = 10;
-  double merge_alpha_xy = 0.3;
-  double merge_alpha_z = 0.3;
-  double merge_alpha_rp = 0.2;
-  double merge_alpha_yaw = 0.8;
-  double fallback_alpha_xy = 0.3;
-  double fallback_alpha_z_valid_ground = 0.02;
+  PoseSmoothingParams pose_smoothing;
+  FallbackPoseMergeParams fallback_merge;
   int imu_orientation_queue_size = 2000;
   int wheel_data_queue_size = 10000;
   int min_gnss_quality = 4;
@@ -103,6 +115,8 @@ struct GaloOdometryParams {
   double elapsed_time_thresh = 50.0;  // ms
   double map_stale_threshold_ms = 500.0;
   double gnss_correction_period_sec = 120.0;
+  bool odom_error_csv_enabled = true;
+  std::string odom_error_csv_path = "/tmp/galo_odometry_error.csv";
   std::string imu_frame = "imu";
   std::string lidar_frame = "rslidar";
   std::string pos_antenna_frame = "pos_antenna";
@@ -154,6 +168,21 @@ struct GnssData {
   double yaw_time = 0;
 };
 
+struct Pose6D {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+  double roll = 0.0;
+  double pitch = 0.0;
+  double yaw = 0.0;
+};
+
+struct PoseErrorStats {
+  bool initialized = false;
+  std::array<double, 6> min{};
+  std::array<double, 6> max{};
+};
+
 struct GroundRegistrationGatePrms {
   int min_matches = 20;
   double max_residual = 0.35;
@@ -180,7 +209,10 @@ class GaloOdometryComponent : public rclcpp::Node {
   bool has_lidar_odom_initialized_from_gnss_ = false;
   bool has_latest_R_base_ = false;
   bool has_prev_lidar_pose_for_prediction_ = false;
+  bool has_latest_gt_pose_ = false;
+  bool odom_error_csv_open_failed_ = false;
   double prev_lidar_pose_time_ = 0.0;
+  double latest_gt_pose_time_ = 0.0;
   std::chrono::steady_clock::time_point last_gnss_correction_warn_time_{};
   std::chrono::steady_clock::time_point last_initialization_warn_time_{};
   std::chrono::steady_clock::time_point last_registration_warn_time_{};
@@ -247,6 +279,9 @@ class GaloOdometryComponent : public rclcpp::Node {
   std::deque<PlanarMapFrame> objects_map_frames_;
 
   GnssData gnss_data_;
+  Pose6D latest_gt_pose_;
+  PoseErrorStats odom_error_stats_;
+  std::ofstream odom_error_csv_;
   WheelSpeedAngleData wheel_data;
   GnssLocalConverter gnss_converter_;
   GroundRegistration ground_registration_;
@@ -295,6 +330,10 @@ class GaloOdometryComponent : public rclcpp::Node {
                                                double alpha_rp, double alpha_y);
   bool TryInitializeOdomFromGnss(bool force_correction = false);
   bool CheckGroundRegistration(const GroundRegistrationResult& res, double dt);
+  bool OpenOdometryErrorCsvIfNeeded();
+  void DumpOdometryErrorCsvRow(const builtin_interfaces::msg::Time& stamp,
+                               const Eigen::Matrix3d& R_odom,
+                               const Eigen::Vector3d& t_odom);
 
   static GaloOdometryParams LoadNodeParams(rclcpp::Node& node);
   static GroundRegistrationParams LoadGroundRegistrationParams(

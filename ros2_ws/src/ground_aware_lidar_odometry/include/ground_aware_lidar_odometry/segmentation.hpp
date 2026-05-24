@@ -49,6 +49,7 @@ struct GroundPatchParams {
   double max_surface_variation = 0.03;
   int patch_reserve = 20000;
   int valid_patch_reserve = 5000;
+  int num_threads = 0;
   double marker_normal_scale = 0.7;
   double marker_shaft_diameter = 0.08;
   double marker_head_diameter = 0.10;
@@ -138,10 +139,26 @@ struct PatchCell {
   int count = 0;
   Eigen::Vector3d sum = Eigen::Vector3d::Zero();
   Eigen::Matrix3d sum_outer = Eigen::Matrix3d::Zero();
-  void AddPoint(const Eigen::Vector3d& p) {
+  void AddPoint(double x, double y, double z) {
     ++count;
-    sum += p;
-    sum_outer += p * p.transpose();
+    sum.x() += x;
+    sum.y() += y;
+    sum.z() += z;
+
+    sum_outer(0, 0) += x * x;
+    sum_outer(0, 1) += x * y;
+    sum_outer(0, 2) += x * z;
+    sum_outer(1, 1) += y * y;
+    sum_outer(1, 2) += y * z;
+    sum_outer(2, 2) += z * z;
+  }
+
+  Eigen::Matrix3d SumOuter() const {
+    Eigen::Matrix3d out = sum_outer;
+    out(1, 0) = out(0, 1);
+    out(2, 0) = out(0, 2);
+    out(2, 1) = out(1, 2);
+    return out;
   }
 };
 

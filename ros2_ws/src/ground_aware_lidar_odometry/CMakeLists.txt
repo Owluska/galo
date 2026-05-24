@@ -170,6 +170,7 @@ target_link_libraries(galo_deskew_component
 target_link_libraries(galo_frontend_component
   Eigen3::Eigen
   ${PCL_LIBRARIES}
+  OpenMP::OpenMP_CXX
 )
 target_link_libraries(deskew_node
   galo_deskew_component
