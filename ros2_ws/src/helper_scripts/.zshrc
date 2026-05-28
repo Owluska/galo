@@ -122,49 +122,38 @@ migrate_to_ros2() {
     fi
 
     echo "🔧 3/3: Patching the yaml-cpp bug in metadata.yaml..."
-    # Python script to safely wipe all QoS profiles to empty strings
-python3 -c "
+    # ROS 2/yaml-cpp on this setup expects offered_qos_profiles to be a string.
+    # rosbags may write it as a block list, an inline [], or another YAML value.
+    python3 - "$output_dir/metadata.yaml" <<'PY'
+from pathlib import Path
 import sys
-filepath = '$output_dir/metadata.yaml'
-try:
-    with open(filepath, 'r') as f:
-        lines = f.readlines()
-        
-    out_lines = []
-    skip_mode = False
-    base_indent = 0
-    
-    for line in lines:
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip(' '))
-        
-        # If we are skipping the giant QoS list
-        if skip_mode:
-            # Keep skipping if the line is deeper than the base indent, 
-            # or if it's a list item starting with '-' at the same indent
-            if stripped == '' or indent > base_indent or line.lstrip().startswith('-'):
-                continue
-            else:
-                skip_mode = False # We hit the next real key (like serialization_format)
 
-        # Look for the trigger word
-        if 'offered_qos_profiles:' in line:
-            # Keep the original indentation, but set it to an empty string
-            out_lines.append(line[:indent] + 'offered_qos_profiles: \"\"\n')
-            base_indent = indent
-            
-            # If it's just 'offered_qos_profiles:\n', trigger skip mode for the next lines
-            if stripped.endswith(':'):
-                skip_mode = True
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+out_lines = []
+skip_mode = False
+base_indent = 0
+
+for line in lines:
+    stripped = line.strip()
+    indent = len(line) - len(line.lstrip(' '))
+
+    if skip_mode:
+        if stripped == '' or indent > base_indent or line.lstrip().startswith('-'):
             continue
+        skip_mode = False
 
-        out_lines.append(line)
-        
-    with open(filepath, 'w') as f:
-        f.writelines(out_lines)
-except Exception as e:
-    print(f'Warning: Could not patch YAML automatically: {e}')
-"
+    if 'offered_qos_profiles:' in line:
+        out_lines.append(line[:indent] + 'offered_qos_profiles: \"\"\\n')
+        base_indent = indent
+        value = line.split('offered_qos_profiles:', 1)[1].strip()
+        skip_mode = (value == '')
+        continue
+
+    out_lines.append(line)
+
+path.write_text(''.join(out_lines))
+PY
 
   echo "✅ Done! Native ROS 2 bag is ready at: $output_dir"
 }
@@ -189,17 +178,30 @@ play_galo_bag() {
     bags=($argv)           # all arguments are bag files
   fi
 
+  local qos_file=/tmp/galo_lidar_qos.yaml
+  cat > "$qos_file" <<'EOF'
+/Sensor/lidar_front/rslidar_points:
+  reliability: best_effort
+  history: keep_last
+  depth: 1
+  durability: volatile
+EOF
+
   # Play each bag sequentially
   for bag in $bags; do
     echo "Playing $bag at rate $RATE"
-    ros2 bag play "$bag" --clock --topics \
-      /tf /Sensor/imu_front/data \
-      /Sensor/lidar_front/rslidar_points \
-      /Sensor/gnss/trimble_nmea_gga \
-      /Sensor/gnss/orientation \
-      /SC/state /SC/pure_state \
-      /FB/wangle_feedback \
-      /FB/wheel_speed_feedback \
+    ros2 bag play "$bag" \
+      --qos-profile-overrides-path "$qos_file" \
+      --clock \
+      --read-ahead-queue-size 100000 \
+      --topics \
+        /tf /Sensor/imu_front/data \
+        /Sensor/lidar_front/rslidar_points \
+        /Sensor/gnss/trimble_nmea_gga \
+        /Sensor/gnss/orientation \
+        /SC/state /SC/pure_state \
+        /FB/wangle_feedback \
+        /FB/wheel_speed_feedback \
       -r "$RATE"
   done
 }
@@ -223,3 +225,9 @@ export ROS_DOMAIN_ID=0
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export RCUTILS_COLORIZED_OUTPUT=1
 export TERM=xterm-256color
+
+# ROS 2 / CycloneDDS interface pinning for GALO
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI=file://$HOME/cyclonedds-wifi.xml
+export ROS_LOCALHOST_ONLY=0
+export OMP_NUM_THREADS=2
