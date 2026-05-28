@@ -1,0 +1,81 @@
+bag: /ros2_ws/BAGS/109_2025-08-14-19-24-29_1212e_ros2
+base_params: /ros2_ws/src/ground_aware_lidar_odometry/config/galo_params.yaml
+out_dir: /tmp/galo_param_sweep
+setup: /ros2_ws/install/setup.bash
+write_best:
+
+execution:
+  use_sim_time: true
+  launch_static_tf: true
+  dry_run: false
+  resume: false
+  rate: 1.0
+  bag_timeout_sec: 120.0
+  startup_sec: 3.0
+  settle_sec: 3.0
+  min_rows: 5
+
+scoring:
+  yaw_weight: 2.0
+  gate_penalty: 2.0
+  max_xy_penalty: 0.05
+
+search:
+  strategy: coordinate
+  passes: 1
+  random_trials: 40
+  random_seed: 7
+  stages:
+    - planar
+    - ground
+    - prediction
+    - gates_smoothing
+
+sweep:
+  planar:
+    planar_registration.voxel_size: [2.0, 3.0, 5.0, 7.0]
+    planar_registration.min_points_per_voxel: [4, 8, 10, 15]
+    planar_registration.max_line_fit_error: [0.3, 0.5, 0.8]
+    planar_registration.min_line_eigen_ratio: [4.0, 6.0, 10.0]
+    planar_registration.min_line_length: [1.0, 1.5, 2.5]
+    planar_registration.min_line_support: [4, 6, 10]
+    planar_registration.max_lines_per_frame: [12, 30, 60, 120]
+    planar_registration.translation_prior_weight: [10.0, 25.0, 50.0, 100.0]
+    planar_registration.line_orientation_weight: [1.0, 2.0, 4.0]
+
+  ground:
+    segmentation.ground.cell_size: [1.5, 2.0, 3.0, 4.0]
+    segmentation.ground.ground_height_threshold: [0.10, 0.15, 0.25]
+    segmentation.ground.min_points_per_cell: [10, 20, 30]
+    segmentation.ground.neighbor_radius: [1, 2, 3]
+    segmentation.ground.min_neighbor_cells: [6, 10, 15]
+    ground_patch.cell_size: [3.0, 5.0, 7.0]
+    ground_patch.min_points: [20, 30, 50]
+    ground_patch.max_thickness: [0.08, 0.10, 0.15, 0.20]
+    ground_patch.min_normal_z: [0.90, 0.95, 0.98]
+    ground_patch.max_surface_variation: [0.01, 0.02, 0.04]
+
+  prediction:
+    prediction.tau: [0.5, 0.8, 1.0, 1.2]
+    prediction.max_diff_residual: [0.4, 0.7, 1.0]
+    prediction.max_steering_correction: [0.3, 0.45, 0.6]
+    prediction.use_pitch_for_z: [true, false]
+    prediction.pitch_z_gain: [0.2, 0.5, 0.99]
+    prediction.max_vertical_speed: [0.5, 1.0, 2.0]
+
+  gates_smoothing:
+    planar_registration_gate_params.min_matches: [3, 4, 6, 8]
+    planar_registration_gate_params.max_residual: [0.5, 0.75, 1.0, 1.5]
+    planar_registration_gate_params.max_abs_dx: [1.0, 2.0, 3.0]
+    planar_registration_gate_params.max_abs_dy: [1.0, 2.0, 3.0]
+    planar_registration_gate_params.max_abs_dyaw: [3.0, 5.0, 8.0]
+    ground_registration_gate_params.min_matches: [8, 15, 25]
+    ground_registration_gate_params.max_residual: [0.25, 0.4, 0.6]
+    ground_registration_gate_params.max_dz: [1.5, 2.5, 4.0]
+    pose_merge.smoothing.alpha_xy: [0.4, 0.55, 0.7, 0.85]
+    pose_merge.smoothing.alpha_yaw: [0.4, 0.55, 0.7, 0.85]
+    pose_merge.smoothing.alpha_z: [0.7, 0.9, 0.99]
+    pose_merge.smoothing.alpha_rp: [0.4, 0.6, 0.8]
+    pose_merge.fallback.alpha_xy: [0.0, 0.25, 0.5, 0.7]
+    pose_merge.fallback.alpha_yaw: [0.0, 0.25, 0.5, 0.7]
+    pose_merge.fallback.alpha_z_valid_ground: [0.5, 0.8, 0.99]
