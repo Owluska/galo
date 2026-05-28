@@ -27,7 +27,7 @@ class GaloFrontendComponent : public rclcpp::Node {
   };
 
   Params params_;
-  GroundSegmentationParams segmentation_params_;
+  SegmentationParams segmentation_params_;
   GroundPatchParams ground_patch_params_;
   PlanarRegistrationParams planar_registration_params_;
   GaloFrontend frontend_;
@@ -45,7 +45,7 @@ class GaloFrontendComponent : public rclcpp::Node {
   void PrintTimeMeasurements(const std::vector<TimeMeasurments_t>& measurements);
 
   static Params LoadParams(rclcpp::Node& node);
-  static GroundSegmentationParams LoadGroundSegmentationParams(
+  static SegmentationParams LoadSegmentationParams(
       rclcpp::Node& node);
   static GroundPatchParams LoadGroundPatchParams(rclcpp::Node& node);
   static PlanarRegistrationParams LoadPlanarRegistrationParams(

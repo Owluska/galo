@@ -32,7 +32,7 @@ bool ShouldLogSteady(std::chrono::steady_clock::time_point& last_log_time,
 GaloFrontendComponent::GaloFrontendComponent(const rclcpp::NodeOptions& options)
     : Node("galo_frontend", options),
       params_(LoadParams(*this)),
-      segmentation_params_(LoadGroundSegmentationParams(*this)),
+      segmentation_params_(LoadSegmentationParams(*this)),
       ground_patch_params_(LoadGroundPatchParams(*this)),
       planar_registration_params_(LoadPlanarRegistrationParams(*this)),
       frontend_(segmentation_params_, ground_patch_params_,
@@ -45,14 +45,14 @@ GaloFrontendComponent::GaloFrontendComponent(const rclcpp::NodeOptions& options)
   options_in.callback_group = callback_group_;
 
   cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      params_.deskewed_cloud_topic, rclcpp::SensorDataQoS().keep_last(1),
+      params_.deskewed_cloud_topic, rclcpp::SensorDataQoS().keep_last(10),
       std::bind(&GaloFrontendComponent::CloudCb, this, std::placeholders::_1),
       options_in);
   features_pub_ =
       this->create_publisher<ground_aware_lidar_odometry::msg::FrameFeatures>(
-          params_.frame_features_topic, 1);
+          params_.frame_features_topic, 10);
   colored_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-      params_.colored_cloud_topic, 1);
+      params_.colored_cloud_topic, 2);
   ground_patches_pub_ =
       this->create_publisher<visualization_msgs::msg::MarkerArray>(
           params_.ground_patches_topic, 10);
@@ -148,31 +148,36 @@ GaloFrontendComponent::Params GaloFrontendComponent::LoadParams(
   return p;
 }
 
-GroundSegmentationParams GaloFrontendComponent::LoadGroundSegmentationParams(
+SegmentationParams GaloFrontendComponent::LoadSegmentationParams(
     rclcpp::Node& node) {
-  GroundSegmentationParams p;
-  p.cell_size =
-      DeclareAndGet<double>(node, "ground_segmentation.cell_size", p.cell_size);
-  p.min_range =
-      DeclareAndGet<double>(node, "ground_segmentation.min_range", p.min_range);
-  p.max_range =
-      DeclareAndGet<double>(node, "ground_segmentation.max_range", p.max_range);
-  p.ground_height_threshold =
-      DeclareAndGet<double>(node, "ground_segmentation.ground_height_threshold",
-                            p.ground_height_threshold);
-  p.min_points_per_cell = DeclareAndGet<int>(
-      node, "ground_segmentation.min_points_per_cell", p.min_points_per_cell);
-  p.neighbor_radius = DeclareAndGet<int>(
-      node, "ground_segmentation.neighbor_radius", p.neighbor_radius);
-  p.min_neighbor_cells = DeclareAndGet<int>(
-      node, "ground_segmentation.min_neighbor_cells", p.min_neighbor_cells);
-  p.ground_z_quantile = DeclareAndGet<double>(
-      node, "ground_segmentation.ground_z_quantile", p.ground_z_quantile);
-  p.grid_reserve = DeclareAndGet<int>(node, "ground_segmentation.grid_reserve",
-                                      p.grid_reserve);
-  p.smoothed_grid_reserve =
-      DeclareAndGet<int>(node, "ground_segmentation.smoothed_grid_reserve",
-                         p.smoothed_grid_reserve);
+  SegmentationParams p;
+  p.common.min_range = DeclareAndGet<double>(
+      node, "segmentation.common.min_range", p.common.min_range);
+  p.common.max_range = DeclareAndGet<double>(
+      node, "segmentation.common.max_range", p.common.max_range);
+  p.ground.cell_size = DeclareAndGet<double>(
+      node, "segmentation.ground.cell_size", p.ground.cell_size);
+
+  p.ground.ground_height_threshold = DeclareAndGet<double>(
+      node, "segmentation.ground.ground_height_threshold",
+      p.ground.ground_height_threshold);
+  p.ground.min_points_per_cell = DeclareAndGet<int>(
+      node, "segmentation.ground.min_points_per_cell",
+      p.ground.min_points_per_cell);
+  p.ground.neighbor_radius = DeclareAndGet<int>(
+      node, "segmentation.ground.neighbor_radius", p.ground.neighbor_radius);
+  p.ground.min_neighbor_cells = DeclareAndGet<int>(
+      node, "segmentation.ground.min_neighbor_cells",
+      p.ground.min_neighbor_cells);
+  p.ground.ground_z_quantile = DeclareAndGet<double>(
+      node, "segmentation.ground.ground_z_quantile",
+      p.ground.ground_z_quantile);
+  p.ground.grid_reserve = DeclareAndGet<int>(
+      node, "segmentation.ground.grid_reserve", p.ground.grid_reserve);
+  p.ground.smoothed_grid_reserve = DeclareAndGet<int>(
+      node, "segmentation.ground.smoothed_grid_reserve",
+      p.ground.smoothed_grid_reserve);
+
   return p;
 }
 
@@ -221,6 +226,26 @@ PlanarRegistrationParams GaloFrontendComponent::LoadPlanarRegistrationParams(
                                        p.voxel_size);
   p.min_points_per_voxel = DeclareAndGet<int>(
       node, "planar_registration.min_points_per_voxel", p.min_points_per_voxel);
+  p.use_cluster_representatives = DeclareAndGet<bool>(
+      node, "planar_registration.use_cluster_representatives",
+      p.use_cluster_representatives);
+  p.max_representatives_per_cluster = DeclareAndGet<int>(
+      node, "planar_registration.max_representatives_per_cluster",
+      p.max_representatives_per_cluster);
+  p.max_line_fit_error = DeclareAndGet<double>(
+      node, "planar_registration.max_line_fit_error", p.max_line_fit_error);
+  p.min_line_eigen_ratio = DeclareAndGet<double>(
+      node, "planar_registration.min_line_eigen_ratio",
+      p.min_line_eigen_ratio);
+  p.min_line_length = DeclareAndGet<double>(
+      node, "planar_registration.min_line_length", p.min_line_length);
+  p.min_line_support = DeclareAndGet<int>(
+      node, "planar_registration.min_line_support", p.min_line_support);
+  p.line_ransac_iterations = DeclareAndGet<int>(
+      node, "planar_registration.line_ransac_iterations",
+      p.line_ransac_iterations);
+  p.max_lines_per_frame = DeclareAndGet<int>(
+      node, "planar_registration.max_lines_per_frame", p.max_lines_per_frame);
   p.grid_reserve = DeclareAndGet<int>(node, "planar_registration.grid_reserve",
                                       p.grid_reserve);
   return p;

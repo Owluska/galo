@@ -56,6 +56,7 @@ class FiniteDeque {
   T PeerBack() const { return queue_.back(); }
 
   void PopFront() { queue_.pop_front(); }
+  void Clear() { queue_.clear(); }
 
   const T& operator[](size_t index) const { return queue_[index]; }
   T& operator[](size_t index) { return queue_[index]; }

@@ -34,6 +34,7 @@ find_package(OpenMP REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/Point2D.msg
   msg/GroundPatch.msg
+  msg/PlanarLine.msg
   msg/FrameFeatures.msg
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs
 )
@@ -209,6 +210,15 @@ install(
 install(
   DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS scripts/galo_param_sweep.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+install(
+  FILES scripts/galo_param_sweep.yaml scripts/README.md
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY include/

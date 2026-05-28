@@ -7,7 +7,7 @@
 
 struct FrameFeatures {
   std_msgs::msg::Header header;
-  std::vector<Eigen::Vector2d> planar_points;
+  std::vector<PlanarLine> planar_lines;
   std::vector<GroundPatch> ground_patches;
   double lidar_time = 0.0;
 };
@@ -21,7 +21,7 @@ struct FrontendResult {
 
 class GaloFrontend {
  public:
-  GaloFrontend(const GroundSegmentationParams& segmentation_params,
+  GaloFrontend(const SegmentationParams& segmentation_params,
                const GroundPatchParams& ground_patch_params,
                const PlanarRegistrationParams& planar_registration_params,
                const rclcpp::Logger& logger, const rclcpp::Clock& clock);

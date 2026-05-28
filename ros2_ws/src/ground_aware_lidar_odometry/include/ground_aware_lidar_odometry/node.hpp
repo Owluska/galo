@@ -3,11 +3,12 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
-#include <chrono>
 #include <array>
+#include <chrono>
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -34,6 +35,7 @@
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "std_msgs/msg/float32.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 namespace {
 
@@ -105,6 +107,7 @@ struct GaloOdometryParams {
   FallbackPoseMergeParams fallback_merge;
   int imu_orientation_queue_size = 2000;
   int wheel_data_queue_size = 10000;
+  int prediction_queue_size = 2000;
   int min_gnss_quality = 4;
   double gnss_yaw_position_max_dt = 0.3;
   int initialization_log_throttle = 1000;
@@ -114,7 +117,7 @@ struct GaloOdometryParams {
   double pose_dt_max = 0.5;
   double elapsed_time_thresh = 50.0;  // ms
   double map_stale_threshold_ms = 500.0;
-  double gnss_correction_period_sec = 120.0;
+  double gnss_correction_period_sec = 0.0;
   bool odom_error_csv_enabled = true;
   std::string odom_error_csv_path = "/tmp/galo_odometry_error.csv";
   std::string imu_frame = "imu";
@@ -124,18 +127,14 @@ struct GaloOdometryParams {
   std::string map_frame = "map";
   std::string body_frame = "base_link";
   std::string gnss_map_frame = "gnss_map";
-  std::string lidar_topic = "/Sensor/lidar_front/rslidar_points";
   std::string imu_topic = "/Sensor/imu_front/data";
   std::string gnss_topic = "/Sensor/gnss/trimble_nmea_gga";
   std::string gnss_orientation_topic = "/Sensor/gnss/orientation";
   std::string pure_state_topic = "/SC/pure_state";
   std::string wheel_speed_topic = "/FB/wheel_speed_feedback";
   std::string wheel_angle_topic = "/FB/wangle_feedback";
-  std::string deskewed_cloud_topic = "/GALO/deskewed_cloud";
   std::string frame_features_topic = "/GALO/frame_features";
-  std::string colored_cloud_topic = "/GALO/colored_cloud";
-  std::string ground_patches_topic = "/GALO/ground_patch_normals";
-  std::string translation_topic = "/GALO/translation";
+  std::string planar_lines_topic = "/GALO/planar_line_markers";
   std::string gt_eulers_topic = "/GALO/gt_eulers";
   std::string est_eulers_topic = "/GALO/est_eulers";
   std::string pure_state_eulers_topic = "/GALO/pure_state_eulers";
@@ -146,6 +145,7 @@ struct GaloOdometryParams {
   LidarCovariance est_cov_;
 };
 
+
 struct ImuOrientationStamped {
   double time = 0.0;
   Eigen::Quaterniond q = Eigen::Quaterniond::Identity();
@@ -155,7 +155,7 @@ struct GroundPatchFrame {
   double time = 0.0;
 };
 struct PlanarMapFrame {
-  std::vector<Eigen::Vector2d> points;
+  std::vector<PlanarLine> lines;
   double time = 0.0;
 };
 
@@ -177,6 +177,11 @@ struct Pose6D {
   double yaw = 0.0;
 };
 
+struct TimedPose6D {
+  double time = 0.0;
+  Pose6D pose;
+};
+
 struct PoseErrorStats {
   bool initialized = false;
   std::array<double, 6> min{};
@@ -189,6 +194,17 @@ struct GroundRegistrationGatePrms {
   double max_droll = 5.0;   // deg/s
   double max_dpitch = 5.0;  // deg/s
   double max_dz = 1.0;      // m/s
+};
+
+struct PlanarRegistrationGatePrms {
+  int min_matches = 20;
+  double max_residual = 0.8;
+  double max_dx = 5.0;       // m/s correction against prediction
+  double max_dy = 5.0;       // m/s correction against prediction
+  double max_dyaw = 20.0;    // deg/s correction against prediction
+  double max_abs_dx = 2.0;   // m correction against prediction
+  double max_abs_dy = 2.0;   // m correction against prediction
+  double max_abs_dyaw = 5.0; // deg correction against prediction
 };
 
 class GaloOdometryComponent : public rclcpp::Node {
@@ -204,15 +220,15 @@ class GaloOdometryComponent : public rclcpp::Node {
   std::string map_frame = "map";
   std::string body_frame = "base_link";
   bool has_imu_lidar_extrinsic_ = false;
-  bool has_imu_prev_ = false;
   bool has_lidar_imu_prev_ = false;
   bool has_lidar_odom_initialized_from_gnss_ = false;
   bool has_latest_R_base_ = false;
   bool has_prev_lidar_pose_for_prediction_ = false;
-  bool has_latest_gt_pose_ = false;
+  bool has_last_speed_output_ = false;
+  bool gnss_corrected_since_last_report_ = false;
   bool odom_error_csv_open_failed_ = false;
   double prev_lidar_pose_time_ = 0.0;
-  double latest_gt_pose_time_ = 0.0;
+  double last_speed_output_ = 0.0;
   std::chrono::steady_clock::time_point last_gnss_correction_warn_time_{};
   std::chrono::steady_clock::time_point last_initialization_warn_time_{};
   std::chrono::steady_clock::time_point last_registration_warn_time_{};
@@ -227,6 +243,7 @@ class GaloOdometryComponent : public rclcpp::Node {
   GroundRegistrationParams ground_registration_params_;
   PlanarRegistrationParams planar_registration_params_;
   GroundRegistrationGatePrms ground_reg_gate_params_;
+  PlanarRegistrationGatePrms planar_reg_gate_params_;
   GnssLocalizationParams gnss_loc_params_;
   PredictionParams prediction_params_;
 
@@ -245,7 +262,6 @@ class GaloOdometryComponent : public rclcpp::Node {
   rclcpp::CallbackGroup::SharedPtr other_callback_group_;
   rclcpp::TimerBase::SharedPtr gnss_correction_timer_;
 
-  rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr translation_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr gt_eulers_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr
       pure_state_eulers_pub_;
@@ -255,31 +271,31 @@ class GaloOdometryComponent : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       lidar_pose_pub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr speed_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
+      planar_lines_pub_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
   Eigen::Vector3d t_map_lidar = Eigen::Vector3d::Zero();
-  Eigen::Vector3d t_lidar_body, t_body_imu, t_body_pos, t_body_orientation;
+  Eigen::Vector3d t_lidar_body, t_body_pos, t_body_orientation;
   Eigen::Vector3d prev_t_map_lidar_ = Eigen::Vector3d::Zero();
-  Eigen::Vector3d velocity_map_lidar_ = Eigen::Vector3d::Zero();
 
-  Eigen::Quaterniond imu_q_prev_, q_imu_lidar, q_map_lidar, imu_q_lidar_prev_,
-      q_lidar_body, q_body_imu;
-  Eigen::Matrix3d R_imu_delta;
+  Eigen::Quaterniond q_imu_lidar, imu_q_lidar_prev_, q_lidar_body, q_body_imu;
   Eigen::Matrix3d latest_R_base_ = Eigen::Matrix3d::Identity();
   Eigen::Matrix3d R_map_lidar_ = Eigen::Matrix3d::Identity();
 
   FiniteDeque<ImuOrientationStamped> imu_orientation_queue_;
   FiniteDeque<WheelSpeedAngleData> wheel_data_queue_;
+  FiniteDeque<TimedPredictedPose> prediction_queue_;
   std::vector<TimeMeasurments_t> time_measurments;
   std::vector<GroundPatch> ground_map_;
-  std::vector<Eigen::Vector2d> objects_map_;
+  std::vector<PlanarLine> objects_map_;
   std::deque<GroundPatchFrame> ground_map_frames_;
   std::deque<PlanarMapFrame> objects_map_frames_;
 
   GnssData gnss_data_;
-  Pose6D latest_gt_pose_;
+  std::deque<TimedPose6D> gt_pose_history_;
   PoseErrorStats odom_error_stats_;
   std::ofstream odom_error_csv_;
   WheelSpeedAngleData wheel_data;
@@ -310,8 +326,8 @@ class GaloOdometryComponent : public rclcpp::Node {
   std::vector<GroundPatch> TransformPatchesToMap(
       const std::vector<GroundPatch>& patches, const Eigen::Matrix3d& R,
       const Eigen::Vector3d& t);
-  std::vector<Eigen::Vector2d> TransformPointsToMap(
-      const std::vector<Eigen::Vector2d>& points, const Eigen::Matrix3d& R,
+  std::vector<PlanarLine> TransformLinesToMap(
+      const std::vector<PlanarLine>& lines, const Eigen::Matrix3d& R,
       const Eigen::Vector3d& t);
   void RebuildGroundMap();
   void RebuildObjectsMap();
@@ -330,10 +346,17 @@ class GaloOdometryComponent : public rclcpp::Node {
                                                double alpha_rp, double alpha_y);
   bool TryInitializeOdomFromGnss(bool force_correction = false);
   bool CheckGroundRegistration(const GroundRegistrationResult& res, double dt);
+  bool CheckPlanarRegistration(const PlanarRegistrationResult& res,
+                               const PredictedPose& pred, double dt);
   bool OpenOdometryErrorCsvIfNeeded();
   void DumpOdometryErrorCsvRow(const builtin_interfaces::msg::Time& stamp,
                                const Eigen::Matrix3d& R_odom,
-                               const Eigen::Vector3d& t_odom);
+                               const Eigen::Vector3d& t_odom,
+                               const PlanarRegistrationResult& planar_res,
+                               const Eigen::Vector3d& pred_base_t,
+                               double pred_base_yaw,
+                               const Eigen::Vector3d& planar_base_t,
+                               double planar_base_yaw, bool planar_gate_ok);
 
   static GaloOdometryParams LoadNodeParams(rclcpp::Node& node);
   static GroundRegistrationParams LoadGroundRegistrationParams(
@@ -343,6 +366,7 @@ class GaloOdometryComponent : public rclcpp::Node {
   static PredictionParams LoadPredictionParams(rclcpp::Node& node);
   static GnssLocalizationParams LoadGnssParams(rclcpp::Node& node);
   static GroundRegistrationGatePrms LoadGroundGateParams(rclcpp::Node& node);
+  static PlanarRegistrationGatePrms LoadPlanarGateParams(rclcpp::Node& node);
 
   bool GetTransformation(tf2_ros::Buffer& tf_buffer,
                          const std::string& target_frame,

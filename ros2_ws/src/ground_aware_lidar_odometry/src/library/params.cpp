@@ -31,6 +31,8 @@ GaloOdometryParams GaloOdometryComponent::LoadNodeParams(rclcpp::Node& node) {
       node, "node.imu_orientation_queue_size", p.imu_orientation_queue_size);
   p.wheel_data_queue_size = DeclareAndGet<int>(
       node, "node.wheel_data_queue_size", p.wheel_data_queue_size);
+  p.prediction_queue_size = DeclareAndGet<int>(
+      node, "node.prediction_queue_size", p.prediction_queue_size);
   p.min_gnss_quality =
       DeclareAndGet<int>(node, "node.min_gnss_quality", p.min_gnss_quality);
   p.gnss_yaw_position_max_dt = DeclareAndGet<double>(
@@ -69,8 +71,6 @@ GaloOdometryParams GaloOdometryComponent::LoadNodeParams(rclcpp::Node& node) {
   p.gnss_map_frame = DeclareAndGet<std::string>(node, "frames.gnss_map_frame",
                                                 p.gnss_map_frame);
 
-  p.lidar_topic =
-      DeclareAndGet<std::string>(node, "topics.lidar", p.lidar_topic);
   p.imu_topic = DeclareAndGet<std::string>(node, "topics.imu", p.imu_topic);
   p.gnss_topic = DeclareAndGet<std::string>(node, "topics.gnss", p.gnss_topic);
   p.gnss_orientation_topic = DeclareAndGet<std::string>(
@@ -81,16 +81,10 @@ GaloOdometryParams GaloOdometryComponent::LoadNodeParams(rclcpp::Node& node) {
                                                    p.wheel_speed_topic);
   p.wheel_angle_topic = DeclareAndGet<std::string>(node, "topics.wheel_angle",
                                                    p.wheel_angle_topic);
-  p.deskewed_cloud_topic = DeclareAndGet<std::string>(
-      node, "topics.deskewed_cloud", p.deskewed_cloud_topic);
   p.frame_features_topic = DeclareAndGet<std::string>(
       node, "topics.frame_features", p.frame_features_topic);
-  p.colored_cloud_topic = DeclareAndGet<std::string>(
-      node, "topics.colored_cloud", p.colored_cloud_topic);
-  p.ground_patches_topic = DeclareAndGet<std::string>(
-      node, "topics.ground_patches", p.ground_patches_topic);
-  p.translation_topic = DeclareAndGet<std::string>(node, "topics.translation",
-                                                   p.translation_topic);
+  p.planar_lines_topic = DeclareAndGet<std::string>(
+      node, "topics.planar_lines", p.planar_lines_topic);
   p.gt_eulers_topic =
       DeclareAndGet<std::string>(node, "topics.gt_eulers", p.gt_eulers_topic);
   p.est_eulers_topic =
@@ -228,6 +222,12 @@ PlanarRegistrationParams GaloOdometryComponent::LoadPlanarRegistrationParams(
       node, "planar_registration.max_match_distance", p.max_match_distance);
   p.min_points_per_voxel = DeclareAndGet<int>(
       node, "planar_registration.min_points_per_voxel", p.min_points_per_voxel);
+  p.use_cluster_representatives = DeclareAndGet<bool>(
+      node, "planar_registration.use_cluster_representatives",
+      p.use_cluster_representatives);
+  p.max_representatives_per_cluster = DeclareAndGet<int>(
+      node, "planar_registration.max_representatives_per_cluster",
+      p.max_representatives_per_cluster);
   p.max_iterations = DeclareAndGet<int>(
       node, "planar_registration.max_iterations", p.max_iterations);
   p.min_matches = DeclareAndGet<int>(node, "planar_registration.min_matches",
@@ -235,6 +235,28 @@ PlanarRegistrationParams GaloOdometryComponent::LoadPlanarRegistrationParams(
 
   p.damping =
       DeclareAndGet<double>(node, "planar_registration.damping", p.damping);
+  p.max_line_fit_error = DeclareAndGet<double>(
+      node, "planar_registration.max_line_fit_error", p.max_line_fit_error);
+  p.min_line_eigen_ratio = DeclareAndGet<double>(
+      node, "planar_registration.min_line_eigen_ratio",
+      p.min_line_eigen_ratio);
+  p.min_line_length = DeclareAndGet<double>(
+      node, "planar_registration.min_line_length", p.min_line_length);
+  p.min_line_support = DeclareAndGet<int>(
+      node, "planar_registration.min_line_support", p.min_line_support);
+  p.line_ransac_iterations = DeclareAndGet<int>(
+      node, "planar_registration.line_ransac_iterations",
+      p.line_ransac_iterations);
+  p.max_lines_per_frame = DeclareAndGet<int>(
+      node, "planar_registration.max_lines_per_frame", p.max_lines_per_frame);
+  p.max_line_angle_deg = DeclareAndGet<double>(
+      node, "planar_registration.max_line_angle_deg", p.max_line_angle_deg);
+  p.line_orientation_weight = DeclareAndGet<double>(
+      node, "planar_registration.line_orientation_weight",
+      p.line_orientation_weight);
+  p.translation_prior_weight = DeclareAndGet<double>(
+      node, "planar_registration.translation_prior_weight",
+      p.translation_prior_weight);
 
   p.max_dx =
       DeclareAndGet<double>(node, "planar_registration.max_dx", p.max_dx);
@@ -306,6 +328,31 @@ GnssLocalizationParams GaloOdometryComponent::LoadGnssParams(rclcpp::Node& node)
       DeclareAndGet<double>(node, "gnss_location.base_lon", p.base_lon);
   p.northp = DeclareAndGet<bool>(node, "gnss_location.northp", p.northp);
   p.zone = DeclareAndGet<int>(node, "gnss_location.utm_zone", p.zone);
+  return p;
+}
+
+
+PlanarRegistrationGatePrms GaloOdometryComponent::LoadPlanarGateParams(
+    rclcpp::Node& node) {
+  PlanarRegistrationGatePrms p;
+
+  p.min_matches = DeclareAndGet<int>(
+      node, "planar_registration_gate_params.min_matches", p.min_matches);
+  p.max_residual = DeclareAndGet<double>(
+      node, "planar_registration_gate_params.max_residual", p.max_residual);
+  p.max_dx = DeclareAndGet<double>(
+      node, "planar_registration_gate_params.max_dx", p.max_dx);
+  p.max_dy = DeclareAndGet<double>(
+      node, "planar_registration_gate_params.max_dy", p.max_dy);
+  p.max_dyaw = DeclareAndGet<double>(
+      node, "planar_registration_gate_params.max_dyaw", p.max_dyaw);
+  p.max_abs_dx = DeclareAndGet<double>(
+      node, "planar_registration_gate_params.max_abs_dx", p.max_abs_dx);
+  p.max_abs_dy = DeclareAndGet<double>(
+      node, "planar_registration_gate_params.max_abs_dy", p.max_abs_dy);
+  p.max_abs_dyaw = DeclareAndGet<double>(
+      node, "planar_registration_gate_params.max_abs_dyaw", p.max_abs_dyaw);
+
   return p;
 }
 

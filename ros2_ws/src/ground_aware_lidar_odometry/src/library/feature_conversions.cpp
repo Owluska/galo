@@ -6,12 +6,21 @@ msg::FrameFeatures ToMsg(const ::FrameFeatures& features) {
   msg::FrameFeatures msg;
   msg.header = features.header;
 
-  msg.planar_points.reserve(features.planar_points.size());
-  for (const auto& point : features.planar_points) {
-    ground_aware_lidar_odometry::msg::Point2D point_msg;
-    point_msg.x = point.x();
-    point_msg.y = point.y();
-    msg.planar_points.push_back(point_msg);
+  msg.planar_lines.reserve(features.planar_lines.size());
+  for (const auto& line : features.planar_lines) {
+    ground_aware_lidar_odometry::msg::PlanarLine line_msg;
+    line_msg.center.x = line.center.x();
+    line_msg.center.y = line.center.y();
+    line_msg.direction.x = line.direction.x();
+    line_msg.direction.y = line.direction.y();
+    line_msg.normal.x = line.normal.x();
+    line_msg.normal.y = line.normal.y();
+    line_msg.z = line.z;
+    line_msg.length = line.length;
+    line_msg.fit_error = line.fit_error;
+    line_msg.support = line.support;
+    line_msg.time = line.time;
+    msg.planar_lines.push_back(line_msg);
   }
 
   msg.ground_patches.reserve(features.ground_patches.size());
@@ -46,9 +55,20 @@ msg::FrameFeatures ToMsg(const ::FrameFeatures& features) {
   features.header = msg.header;
   features.lidar_time = rclcpp::Time(msg.header.stamp).seconds();
 
-  features.planar_points.reserve(msg.planar_points.size());
-  for (const auto& point_msg : msg.planar_points) {
-    features.planar_points.emplace_back(point_msg.x, point_msg.y);
+  features.planar_lines.reserve(msg.planar_lines.size());
+  for (const auto& line_msg : msg.planar_lines) {
+    PlanarLine line;
+    line.center = Eigen::Vector2d(line_msg.center.x, line_msg.center.y);
+    line.direction = Eigen::Vector2d(line_msg.direction.x, line_msg.direction.y);
+    if (line.direction.squaredNorm() > 1e-12) line.direction.normalize();
+    line.normal = Eigen::Vector2d(line_msg.normal.x, line_msg.normal.y);
+    if (line.normal.squaredNorm() > 1e-12) line.normal.normalize();
+    line.z = line_msg.z;
+    line.length = line_msg.length;
+    line.fit_error = line_msg.fit_error;
+    line.support = line_msg.support;
+    line.time = line_msg.time;
+    features.planar_lines.push_back(line);
   }
 
   features.ground_patches.reserve(msg.ground_patches.size());

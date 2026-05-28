@@ -1,0 +1,265 @@
+# GALO runtime parameters.
+#
+# Pipeline overview:
+#   raw LiDAR + IMU + wheel data
+#     -> GaloDeskewComponent publishes topics.deskewed_cloud
+#     -> GaloFrontendComponent publishes topics.frame_features
+#     -> GaloOdometryComponent publishes pose/map/debug outputs
+#
+# Both launch files load this same dictionary:
+#   galo.launch.py          separate processes
+#   galo_composed.launch.py component_container_mt
+galo:
+  ros__parameters:
+    # Local GNSS origin used by GnssLocalConverter.
+    # base_lon/base_lat are the reference point for local ENU-like coordinates.
+    gnss_location:
+      base_lon: 75.46162227777778
+      base_lat: 51.708812183333336
+      utm_zone: 43
+      northp: true
+    
+    # General node behavior shared by frontend and odometry components.
+    # debug enables extra visualization/timing output.
+    node:
+      debug: 1
+      max_ground_map_frames: 30       # number of recent ground frames kept in the local map
+      max_planar_map_frames: 20        # number of recent planar/non-ground frames kept in the local map
+      imu_orientation_queue_size: 2000
+      wheel_data_queue_size: 10000
+      prediction_queue_size: 2000
+      min_gnss_quality: 4            # usually RTK fixed or similarly high-confidence fixes
+      gnss_yaw_position_max_dt: 0.3  # max allowed GNSS position/yaw timestamp mismatch, seconds
+      initialization_log_throttle: 1000
+      registration_log_throttle: 1000
+      min_ground_patches_for_map_update: 6
+      pose_dt_min: 0.001             # reject prediction/update dt smaller than this, seconds
+      pose_dt_max: 0.5               # reject prediction/update dt larger than this, seconds
+      elapsed_time_thresh: 75.0      # log timing measurements above this threshold, ms
+      map_stale_threshold_ms: 60000.0 # prune local map frames older than this relative to current scan
+      gnss_correction_period_sec: 0.0
+      odom_error_csv_enabled: true
+      odom_error_csv_path: "/ros2_ws/galo_odometry_error_rep.csv"
+
+    # Blending weights used when combining planar registration, ground registration,
+    # and prediction/IMU prior into the final LiDAR pose.
+    pose_merge:
+      # Normal path: smooth registration outputs against prediction/IMU prior.
+      smoothing:
+        alpha_xy: 0.7
+        alpha_z: 0.99
+        alpha_rp: 0.8
+        alpha_yaw: 0.7
+
+      # Fallback path used when ground registration is rejected.
+      fallback:
+        alpha_xy: 0.5
+        alpha_yaw: 0.5
+        alpha_z_valid_ground: 0.99
+
+    # TF frame names. Static transforms must be available for these frame pairs.
+    frames:
+      imu_frame: "imu"
+      lidar_frame: "rslidar"
+      pos_antenna_frame: "pos_antenna"
+      orientation_antenna_frame: "orientation_antenna"
+      map_frame: "map"
+      body_frame: "base_link"
+      gnss_map_frame: "gnss_map"
+
+    # ROS topic names. Keep deskewed_cloud and frame_features consistent across
+    # the three pipeline stages if you remap them.
+    topics:
+      lidar: "/Sensor/lidar_front/rslidar_points"       # raw LiDAR input to deskew
+      imu: "/Sensor/imu_front/data"                     # IMU input to deskew and odometry
+      gnss: "/Sensor/gnss/trimble_nmea_gga"             # GNSS position input to odometry
+      gnss_orientation: "/Sensor/gnss/orientation"      # GNSS heading input to odometry
+      pure_state: "/SC/pure_state"                      # optional comparison/debug state
+      wheel_speed: "/FB/wheel_speed_feedback"           # wheel speed for deskew and prediction
+      wheel_angle: "/FB/wangle_feedback"                # steering/wheel angle for prediction
+      deskewed_cloud: "/GALO/deskewed_cloud"            # deskew -> frontend
+      deskewed_heartbeat: "/GALO/deskewed_cloud_heartbeat" # lightweight deskew publish-rate debug
+      frame_features: "/GALO/frame_features"            # frontend -> odometry
+      colored_cloud: "/GALO/colored_cloud"              # frontend segmentation debug output
+      ground_patches: "/GALO/ground_patch_normals"      # frontend ground patch marker output
+      planar_lines: "/GALO/planar_line_markers"         # odometry point-to-line registration debug
+      gt_eulers: "/GALO/gt_eulers"
+      est_eulers: "/GALO/est_eulers"
+      pure_state_eulers: "/GALO/pure_state_eulers"
+      true_pose: "/GALO/true_pose"
+      estimate_pose: "/GALO/estimate_pose"
+      speed: "/GALO/speed"
+
+    # Covariance values for the GNSS/IMU reference pose message.
+    # Rotation precision values are configured in degrees and converted in code.
+    gnss_covariance:
+      x_precision: 0.03
+      y_precision: 0.03
+      z_precision: 0.03
+      roll_precision: 5.0
+      pitch_precision: 5.0
+      yaw_precision: 5.0
+
+    # Covariance shaping for the LiDAR odometry estimate.
+    # Residual/match scaling increases x/y/yaw uncertainty when planar ICP is weak.
+    lidar_covariance:
+      base_xy: 0.1
+      z: 0.2
+      scale: 1.0
+      roll: 0.5
+      pitch: 0.5
+      residual_norm: 0.1
+      residual_scale_min: 1.0
+      residual_scale_max: 5.0
+      match_count_norm: 100.0
+      match_count_scale_min: 1.0
+      match_count_scale_max: 3.0
+      yaw_base_deg: 2.0
+
+    # Motion compensation. Deskew waits until IMU and speed queues cover the
+    # full scan interval, then corrects each point using yaw rate and body speed.
+    deskew:
+      imu_queue_size: 2000
+      lidar_queue_size: 10
+      speed_queue_size: 10
+      num_threads: 4              # 0 uses OpenMP runtime default
+      scan_period: 0.1             # seconds per LiDAR revolution/scan
+      stamp_is_scan_end: true      # true when cloud header stamp is scan end time
+      log_throttle: 2000
+      debug: 0
+      min_time_epsilon: 0.000001
+      relative_time_tolerance: 0.001
+      azimuth_range_epsilon: 0.000001
+      max_speed_age: 0.5
+
+    # Grid-based segmentation in the frontend.
+    segmentation:
+      common:
+        min_range: 5.0
+        max_range: 80.0
+      ground:
+        cell_size: 3.0
+        ground_height_threshold: 0.15
+        min_points_per_cell: 20
+        neighbor_radius: 2
+        min_neighbor_cells: 15
+        ground_z_quantile: 0.25
+        grid_reserve: 50000
+        smoothed_grid_reserve: 50000
+    # Ground patch extraction from segmented ground cells.
+    # Normal and surface variation thresholds control patch quality.
+    ground_patch:
+      cell_size: 5.0
+      min_points: 30
+      max_thickness: 0.10
+      min_normal_z: 0.95
+      max_surface_variation: 0.02
+      patch_reserve: 20000
+      valid_patch_reserve: 5000
+      num_threads: 4              # 0 uses OpenMP runtime default
+      marker_normal_scale: 0.7
+      marker_shaft_diameter: 0.08
+      marker_head_diameter: 0.10
+      marker_head_length: 0.12
+      marker_lifetime: 0.2
+      cell_marker_z_offset: 0.02
+      cell_marker_height: 0.03
+      cell_marker_alpha: 0.25
+
+    # Ground registration estimates z/roll/pitch against the local ground map.
+    # Limits are per-iteration/update guards against implausible corrections.
+    ground_registration:
+      max_match_distance: 15.0
+      min_normal_dot: 0.75
+      max_iterations: 10
+      min_matches: 5
+      max_dz: 1.0
+      max_roll: 0.05
+      max_pitch: 0.05
+      damping_z: 0.001
+      damping_roll: 0.01
+      damping_pitch: 0.01
+      min_x_span_for_pitch: 8.0
+      min_y_span_for_roll: 6.0
+      imu_roll_weight: 100.0
+      imu_pitch_weight: 10.0
+      use_imu_prior: true
+      log_throttle: 2000
+      max_match_z_difference: 2.0
+      k_nearest_neighbors: 10
+      range_weight_coeff: 0.005
+      condition_lambda_floor: 0.000000001
+      min_condition_eigenvalue: 0.0001
+      max_condition_number: 1000000.0
+      convergence_eps: 0.00001
+      early_stop_worsen_rel_tol: 0.01
+      early_stop_worsen_abs_tol: 0.000000001
+
+    # Final acceptance gate for ground registration before using it in pose merge.
+    ground_registration_gate_params:
+      min_matches : 15
+      max_residual : 0.4
+      max_droll : 15.0   # deg / s
+      max_dpitch : 15.0  # deg / s
+      max_dz : 2.5      # m / s max_dz: 2.2   # m/s for 11 m/s on 20% slope
+
+    # Planar/non-ground registration extracts compact line features from
+    # voxelized non-ground points, then registers current lines against the
+    # saved local line map.
+    planar_registration:
+      voxel_size: 5.0
+      max_match_distance: 20.0
+      min_points_per_voxel: 10
+      use_cluster_representatives: true
+      max_representatives_per_cluster: 12
+      max_iterations: 20
+      min_matches: 10
+      damping: 0.0001
+      max_line_fit_error: 0.50
+      min_line_eigen_ratio: 6.0
+      min_line_length: 1.5
+      min_line_support: 6
+      line_ransac_iterations: 25
+      max_lines_per_frame: 12
+      max_line_angle_deg: 15.0
+      line_orientation_weight: 2.0
+      translation_prior_weight: 50.0
+      max_dx: 15.0
+      max_dy: 15.0
+      max_dyaw: 0.5
+      max_dx_step: 0.50
+      max_dy_step: 0.50
+      max_dyaw_step: 0.02
+      convergence_eps: 0.00001
+      early_stop_worsen_rel_tol: 0.01
+      early_stop_worsen_abs_tol: 0.000000001
+      grid_reserve: 50000
+
+    # Final acceptance gate for planar registration before using x/y/yaw updates.
+    # Limits are correction rates against the wheel/previous-pose prediction.
+    planar_registration_gate_params:
+      min_matches: 4
+      max_residual: 1.0
+      max_dx: 10.0      # m/s
+      max_dy: 10.0      # m/s
+      max_dyaw: 10.0     # deg/s
+      max_abs_dx: 2.0   # m
+      max_abs_dy: 2.0   # m
+      max_abs_dyaw: 5.0 # deg
+
+    # Wheel-model prediction used as a prior for odometry and speed estimate for deskew.
+    prediction:
+      rear_track: 5.16
+      wheelbase: 5.3
+      max_diff_residual: 0.7
+      max_jump: 2.0
+      min_speed_for_turn_check: 0.2
+      tau: 0.80
+      min_prediction_dt: 0.001
+      max_prediction_dt: 1.0
+      max_wheel_data_age: 0.5
+      min_valid_speed: 0.05
+      max_steering_correction: 0.45
+      use_pitch_for_z: true
+      pitch_z_gain: 0.99
+      max_vertical_speed: 2.0

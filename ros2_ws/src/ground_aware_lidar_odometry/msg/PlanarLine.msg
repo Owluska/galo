@@ -1,0 +1,8 @@
+ground_aware_lidar_odometry/Point2D center
+ground_aware_lidar_odometry/Point2D direction
+ground_aware_lidar_odometry/Point2D normal
+float64 z
+float64 length
+float64 fit_error
+int32 support
+float64 time

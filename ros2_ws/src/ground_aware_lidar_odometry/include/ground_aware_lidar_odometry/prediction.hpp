@@ -8,6 +8,11 @@ struct PredictedPose {
   double speed;
 };
 
+struct TimedPredictedPose {
+  PredictedPose pose;
+  double time = 0.0;
+};
+
 struct WheelSpeedAngleData {
   double right_speed = 0;
   double left_speed = 0;

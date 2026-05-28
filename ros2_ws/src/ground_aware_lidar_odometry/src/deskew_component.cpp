@@ -52,27 +52,27 @@ GaloDeskewComponent::GaloDeskewComponent(const rclcpp::NodeOptions& options)
   sensor_options.callback_group = sensor_callback_group_;
 
   lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      params_.lidar_topic, rclcpp::SensorDataQoS().keep_last(1),
+      params_.lidar_topic, rclcpp::SensorDataQoS().keep_last(10),
       std::bind(&GaloDeskewComponent::LidarCb, this, std::placeholders::_1),
       lidar_options);
   imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-      params_.imu_topic, 100,
+      params_.imu_topic, 500,
       std::bind(&GaloDeskewComponent::ImuCb, this, std::placeholders::_1),
       sensor_options);
   wheel_speed_sub_ = this->create_subscription<common_msgs::msg::WheelSpeed>(
-      params_.wheel_speed_topic, 10,
+      params_.wheel_speed_topic, 100,
       std::bind(&GaloDeskewComponent::WheelSpeedCb, this,
                 std::placeholders::_1),
       sensor_options);
   wheel_angle_sub_ = this->create_subscription<qarl_msgs::msg::WAngleFeedback>(
-      params_.wheel_angle_topic, 10,
+      params_.wheel_angle_topic, 100,
       std::bind(&GaloDeskewComponent::WheelAngleCb, this,
                 std::placeholders::_1),
       sensor_options);
   deskew_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-      params_.deskewed_cloud_topic, 1);
+      params_.deskewed_cloud_topic, 10);
   deskew_heartbeat_pub_ = this->create_publisher<std_msgs::msg::Header>(
-      params_.deskewed_heartbeat_topic, 1);
+      params_.deskewed_heartbeat_topic, 10);
 
   RCLCPP_INFO(this->get_logger(), "GALO deskew component: %s -> %s",
               params_.lidar_topic.c_str(),

@@ -1,3 +1,3 @@
 std_msgs/Header header
-ground_aware_lidar_odometry/Point2D[] planar_points
+ground_aware_lidar_odometry/PlanarLine[] planar_lines
 ground_aware_lidar_odometry/GroundPatch[] ground_patches

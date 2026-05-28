@@ -3,6 +3,7 @@
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl_conversions/pcl_conversions.h>
 
 #include <Eigen/Dense>
 #include <algorithm>
@@ -29,10 +30,13 @@ struct CellKeyHash {
   }
 };
 
-struct GroundSegmentationParams {
-  double cell_size = 1.0;
+struct SegmentationCommonParams {
   double min_range = 2.0;
   double max_range = 80.0;
+};
+
+struct GroundSegmentationParams {
+  double cell_size = 1.0;
   double ground_height_threshold = 0.20;
   int min_points_per_cell = 5;
   int neighbor_radius = 1;
@@ -40,6 +44,11 @@ struct GroundSegmentationParams {
   double ground_z_quantile = 0.20;
   int grid_reserve = 50000;
   int smoothed_grid_reserve = 50000;
+};
+
+struct SegmentationParams {
+  SegmentationCommonParams common;
+  GroundSegmentationParams ground;
 };
 struct GroundPatchParams {
   double cell_size = 5.0;
@@ -91,9 +100,22 @@ struct PlanarRegistrationParams {
   double voxel_size = 1.0;  // m
   double max_match_distance = 1.0;
   int min_points_per_voxel = 8;
+  bool use_cluster_representatives = true;
+  int max_representatives_per_cluster = 5;
   int max_iterations = 15;
   int min_matches = 20;
   double damping = 1e-4;
+  int line_k_nearest = 6;
+  double max_line_fit_error = 0.5;
+  double min_line_eigen_ratio = 6.0;
+  double max_line_neighbor_distance = 3.0;
+  double min_line_length = 2.0;
+  int min_line_support = 4;
+  int line_ransac_iterations = 200;
+  int max_lines_per_frame = 120;
+  double max_line_angle_deg = 25.0;
+  double line_orientation_weight = 2.0;
+  double translation_prior_weight = 10.0;
 
   double max_dx = 1.0;
   double max_dy = 1.0;
@@ -182,6 +204,25 @@ struct PlanarRegistrationResult {
   bool valid = false;
 };
 
+struct PlanarLine {
+  Eigen::Vector2d center = Eigen::Vector2d::Zero();
+  Eigen::Vector2d direction = Eigen::Vector2d::UnitX();
+  Eigen::Vector2d normal = Eigen::Vector2d::UnitY();
+  double z = 0.0;
+  double length = 1.0;
+  double fit_error = 0.0;
+  int support = 0;
+  double time = 0.0;
+};
+
+struct PlanarLineDebug {
+  Eigen::Vector2d center = Eigen::Vector2d::Zero();
+  Eigen::Vector2d direction = Eigen::Vector2d::UnitX();
+  double z = 0.0;
+  double length = 1.0;
+  double residual = 0.0;
+};
+
 struct GroundPatch {
   Eigen::Vector3d centroid;
   Eigen::Vector3d normal;
@@ -195,30 +236,43 @@ struct GroundPatch {
 
 struct Voxel2D {
   int count = 0;
+  bool visited = false;
   Eigen::Vector2d sum = Eigen::Vector2d::Zero();
+  Eigen::Matrix2d sum_outer = Eigen::Matrix2d::Zero();
+  Eigen::Vector2d min_pt = Eigen::Vector2d::Constant(
+      std::numeric_limits<double>::infinity());
+  Eigen::Vector2d max_pt = Eigen::Vector2d::Constant(
+      -std::numeric_limits<double>::infinity());
+
+  void AddPoint(const Eigen::Vector2d& p) {
+    ++count;
+    sum += p;
+    sum_outer += p * p.transpose();
+    min_pt = min_pt.cwiseMin(p);
+    max_pt = max_pt.cwiseMax(p);
+  }
 };
 
 class Segmentation {
  public:
-  Segmentation(const GroundSegmentationParams& params) : params_(params) {
-    grid_.reserve(params_.grid_reserve);
-    smoothed_ground_z_.reserve(params_.smoothed_grid_reserve);
+  Segmentation(const SegmentationParams& params) : params_(params) {
+    grid_.reserve(params_.ground.grid_reserve);
+    smoothed_ground_z_.reserve(params_.ground.smoothed_grid_reserve);
   }
 
-  SegmentationResult Classify(const CloudMsg& msg);
+  SegmentationResult SegmentGround(const CloudMsg& msg);
 
   sensor_msgs::msg::PointCloud2 MakeColoredCloud(
       const CloudMsg& cloud, const SegmentationResult& result) const;
 
  private:
-  GroundSegmentationParams params_;
+  SegmentationParams params_;
   std::unordered_map<CellKey, GridCell, CellKeyHash> grid_;
   std::unordered_map<CellKey, double, CellKeyHash> smoothed_ground_z_;
 
   std::pair<int, int> GetIndexes(float x, float y) const;
 
   void FillGrid(const CloudMsg& msg);
-
   void FillSmoothedGrid();
 
   double GetNeighborGroundZ(const CellKey& key) const;
@@ -256,7 +310,7 @@ class GroundRegistration {
  private:
   GroundRegistrationParams params_;
   rclcpp::Logger logger_;
-  rclcpp::Clock clock_;
+  mutable rclcpp::Clock clock_;
   static Eigen::Matrix3d Skew(const Eigen::Vector3d& v);
 
   static Eigen::Matrix3d ExpSO3(const Eigen::Vector3d& w);
@@ -281,6 +335,13 @@ class PlanarRegistration {
                                  const std::vector<Eigen::Vector2d>& current,
                                  const Eigen::Matrix2d& R_initial,
                                  const Eigen::Vector2d& t_initial);
+
+  PlanarRegistrationResult AlignLines(const std::vector<PlanarLine>& map,
+                                      const std::vector<PlanarLine>& current,
+                                      const Eigen::Matrix2d& R_initial,
+                                      const Eigen::Vector2d& t_initial);
+
+  std::vector<Eigen::Vector2d> ExtractAllPoints(const CloudMsg& cloud) const;
   std::vector<Eigen::Vector2d> ExtractPoints(
       const CloudMsg& cloud, const std::vector<PointLabels>& labels) const;
   std::vector<Eigen::Vector2d> ExtractFilteredPoints(
@@ -289,8 +350,15 @@ class PlanarRegistration {
   std::vector<Eigen::Vector2d> Filter(
       const std::vector<Eigen::Vector2d>& inp) const;
 
+  std::vector<PlanarLine> ExtractLines(
+      const std::vector<Eigen::Vector2d>& points, double time = 0.0) const;
+
+  visualization_msgs::msg::MarkerArray MakeLineMarkers(
+      const std_msgs::msg::Header& header, const std::string& frame_id) const;
+
  private:
   PlanarRegistrationParams params_;
   rclcpp::Logger logger_;
-  rclcpp::Clock clock_;
+  mutable rclcpp::Clock clock_;
+  std::vector<PlanarLineDebug> last_line_debug_;
 };
