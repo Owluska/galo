@@ -1,450 +1,341 @@
 # Ground Aware LiDAR Odometry
 
-`ground_aware_lidar_odometry` is a ROS 2 package for LiDAR odometry using ground-aware registration and planar object registration.
-
-The system estimates LiDAR motion by combining:
-
-- IMU-assisted rotational prediction
-- LiDAR deskewing
-- Ground segmentation
-- Ground patch extraction
-- Ground-based roll, pitch, and height correction
-- 2D planar registration for horizontal translation and yaw
-- Local map accumulation using recent ground and object frames
-
-The project is currently experimental and intended for development and testing of ground-aware odometry pipelines.
-
----
-
-## Overview
-
-The odometry pipeline processes each LiDAR scan as follows:
-
-1. Synchronize and deskew the LiDAR cloud using IMU angular velocity.
-2. Segment the cloud into ground and non-ground points.
-3. Extract ground patches from ground-labeled points.
-4. Extract and voxel-filter planar/object points from non-ground points.
-5. Register the current planar points against the accumulated object map.
-6. Register current ground patches against the accumulated ground map.
-7. Merge the planar and ground registration results into a global pose estimate.
-8. Transform the current scan features into the map frame and update local maps.
-
-The system keeps separate local maps for:
-
-- Ground patches
-- Planar/object points
-
-These maps are rebuilt from a sliding window of recent frames.
-
----
-
-## Main Components
-
-### LiDAR Deskewing
-
-The deskew module compensates for LiDAR motion distortion using IMU angular velocity.
-
-Input:
-
-- Raw LiDAR `sensor_msgs/msg/PointCloud2`
-- IMU angular velocity
-
-Output:
-
-- Deskewed point cloud
-
-Published topic:
-
-```txt
-/GALO/deskewed_cloud
-````
-
-### Ground Segmentation
-
-Ground segmentation is performed using a 2D grid over the LiDAR scan.
-
-For each grid cell, the minimum observed `z` value is estimated and smoothed using neighboring cells. Points close to the local ground height are classified as ground.
-
-Labels:
-
-* `GROUND`
-* `NON_GROUND`
-* `UNKNOWN`
-
-Debug output:
-
-```txt
-/GALO/colored_cloud
-```
-
-### Ground Patch Extraction
-
-Ground points are grouped into grid cells. For each cell, a local covariance matrix is computed and eigen-decomposition is used to estimate:
-
-* Patch centroid
-* Patch normal
-* Thickness
-* Planarity
-* Support point count
-
-Invalid patches are rejected using thresholds such as:
-
-* Minimum number of points
-* Maximum thickness
-* Minimum normal `z`
-* Minimum planarity
-
-Debug output:
-
-```txt
-/GALO/ground_patch_normals
-```
-
-### Ground Registration
-
-Ground registration aligns current ground patches to the accumulated ground map.
-
-It estimates mainly:
-
-* Vertical translation `z`
-* Roll correction
-* Pitch correction
-
-The registration uses point-to-plane residuals:
-
-```txt
-r = n_map · (p_current_transformed - p_map)
-```
-
-Nearest ground patches are found using a KD-tree.
-
-An IMU prior can be used to stabilize roll and pitch.
-
-### Planar Registration
-
-Planar registration aligns current non-ground 2D points against the accumulated object map.
-
-It estimates:
-
-* `x` translation
-* `y` translation
-* Yaw rotation
-
-The registration uses nearest-neighbor ICP-style matching with a KD-tree.
-
-Only the XY projection is used.
-
----
-
-## ROS Interfaces
-
-### Subscribed Topics
-
-```txt
-/Sensor/lidar_front/rslidar_points
-```
-
-Type:
-
-```txt
-sensor_msgs/msg/PointCloud2
-```
-
-Raw LiDAR point cloud.
-
-```txt
-/Sensor/imu_front/data
-```
-
-Type:
-
-```txt
-sensor_msgs/msg/Imu
-```
-
-IMU orientation and angular velocity.
-
-### Published Topics
-
-```txt
-/GALO/deskewed_cloud
-```
-
-Type:
-
-```txt
-sensor_msgs/msg/PointCloud2
-```
-
-Deskewed LiDAR cloud.
-
-```txt
-/GALO/colored_cloud
-```
-
-Type:
-
-```txt
-sensor_msgs/msg/PointCloud2
-```
-
-Debug cloud with ground/non-ground coloring.
-
-```txt
-/GALO/ground_patch_normals
-```
-
-Type:
-
-```txt
-visualization_msgs/msg/MarkerArray
-```
-
-Ground patch normal markers.
-
-```txt
-/GALO/translation
-```
-
-Type:
-
-```txt
-geometry_msgs/msg/Point
-```
-
-Debug translation output.
-
-```txt
-/GALO/eulers
-```
-
-Type:
-
-```txt
-geometry_msgs/msg/Point
-```
-
-Debug roll, pitch, yaw output from GALO.
-
-```txt
-/GALO/imu_eulers
-```
-
-Type:
-
-```txt
-geometry_msgs/msg/Point
-```
-
-Debug roll, pitch, yaw output from IMU delta.
-
----
+`ground_aware_lidar_odometry` is a ROS 2 Humble LiDAR odometry workspace for a
+ground-aware pipeline. It deskews LiDAR scans, extracts ground patches and
+planar line features, registers the current frame against sliding local maps,
+and compares the estimate against GNSS/pure-state reference data when available.
+
+The repository is laid out as a complete ROS 2 workspace:
+
+- `ros2_ws/src/ground_aware_lidar_odometry` - GALO nodes, components, launch,
+  config, messages, and tuning scripts.
+- `ros2_ws/src/static_tf_publisher` - static sensor transform publisher used by
+  the launch files and sweep script.
+- `ros2_ws/src/common_msgs` and `ros2_ws/src/qarl_msgs` - message packages used
+  by the pipeline.
+- `ros2_ws/report_processor.ipynb` - report CSV parser and Plotly figure
+  exporter.
+- `docs/report_figures` - exported figures used in this README.
+
+## Pipeline
+
+The runtime pipeline is split into three ROS nodes:
+
+1. `deskew_node` subscribes to raw LiDAR, IMU, wheel speed, and wheel angle
+   topics, then publishes `/GALO/deskewed_cloud`.
+2. `frontend_node` consumes the deskewed cloud, segments ground, extracts ground
+   patches and planar lines, and publishes `/GALO/frame_features` plus debug
+   clouds/markers.
+3. `node` consumes frame features, GNSS/reference data, IMU, and wheel data,
+   runs prediction plus ground/planar registration, updates sliding maps, and
+   publishes estimated pose/debug topics.
+
+The default launch file starts all three nodes with the shared parameter file
+`ros2_ws/src/ground_aware_lidar_odometry/config/galo_params.yaml`.
 
 ## Dependencies
 
-This package depends on:
-
-* ROS 2
-* `rclcpp`
-* `std_msgs`
-* `sensor_msgs`
-* `geometry_msgs`
-* `visualization_msgs`
-* `tf2_ros`
-* `tf2_sensor_msgs`
-* `Eigen3`
-* `PCL`
-* `pcl_conversions`
-* `user_msgs`
-
-For ROS 2 Humble, install common dependencies with:
+Install ROS 2 Humble and common package dependencies:
 
 ```bash
 sudo apt update
 sudo apt install \
   ros-humble-pcl-conversions \
   ros-humble-pcl-ros \
+  ros-humble-tf2-ros \
+  ros-humble-tf2-sensor-msgs \
   libpcl-dev \
   libeigen3-dev
 ```
 
----
-
-## Building
-
-Clone the package into a ROS 2 workspace:
+For report parsing and Plotly image export:
 
 ```bash
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws/src
-git clone <your-repository-url> ground_aware_lidar_odometry
+python3 -m pip install numpy pandas plotly nbformat kaleido
 ```
 
-Build with `colcon`:
+`kaleido` is required by Plotly `fig.write_image(...)`.
+
+## Build
+
+From the repository root:
 
 ```bash
-cd ~/ros2_ws
-colcon build --packages-select ground_aware_lidar_odometry
-```
-
-Source the workspace:
-
-```bash
+cd /home/kkagirins/dev/lidar-odometry-light/ros2_ws
+colcon build
 source install/setup.bash
 ```
 
----
-
-## Running
-
-Run the node directly:
+Build only the main package during development:
 
 ```bash
-ros2 run ground_aware_lidar_odometry node
+colcon build --packages-select ground_aware_lidar_odometry
+source install/setup.bash
 ```
-but better via launch file:
+
+The package installs these executables:
+
+- `ros2 run ground_aware_lidar_odometry deskew_node`
+- `ros2 run ground_aware_lidar_odometry frontend_node`
+- `ros2 run ground_aware_lidar_odometry node`
+- `ros2 run ground_aware_lidar_odometry galo_param_sweep.py`
+
+## Launch
+
+Run the standard non-composed pipeline:
 
 ```bash
 ros2 launch ground_aware_lidar_odometry galo.launch.py
 ```
 
-or in sim mode:
+Run with bag/simulation time:
 
 ```bash
-ros2 launch ground_aware_lidar_odometry galo.launch.py use_sim_time:=True
+ros2 launch ground_aware_lidar_odometry galo.launch.py use_sim_time:=true
 ```
 
-if TF publication needed:
+Launch GALO and the static TF publisher together:
+
+```bash
+ros2 launch ground_aware_lidar_odometry galo.launch.py \
+  use_sim_time:=true \
+  launch_static_tf:=true
+```
+
+Run the composed/component container variant:
+
+```bash
+ros2 launch ground_aware_lidar_odometry galo_composed.launch.py \
+  use_sim_time:=true \
+  launch_static_tf:=true
+```
+
+Run static TF separately:
 
 ```bash
 ros2 launch static_tf_publisher static_tf.launch.py
 ```
 
-if Foxglove needed:
+Optional Foxglove bridge:
 
 ```bash
 ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 ```
 
-example for running bag comand:
+## Bag Replay
+
+Replay the known GALO test bag with the topics required by the configured
+pipeline:
 
 ```bash
-ros2 bag play 109_2025-08-14-19-24-54_1213e_ros2 --clock --topics /tf /Sensor/imu_front/data /Sensor/lidar_front/rslidar_points /Sensor/gnss/trimble_nmea_gga /Sensor/gnss/orientation /SC/state /SC/pure_state /FB/wangle_feedback /FB/wheel_speed_feedback -r 0.5
+ros2 bag play 109_2025-08-14-19-24-54_1213e_ros2 \
+  --clock \
+  --topics \
+    /tf \
+    /Sensor/imu_front/data \
+    /Sensor/lidar_front/rslidar_points \
+    /Sensor/gnss/trimble_nmea_gga \
+    /Sensor/gnss/orientation \
+    /SC/state \
+    /SC/pure_state \
+    /FB/wangle_feedback \
+    /FB/wheel_speed_feedback \
+  -r 0.5
 ```
----
+
+The parameter sweep config uses another default bag path:
+
+```yaml
+bag: /ros2_ws/BAGS/109_2025-08-14-19-24-29_1212e_ros2
+```
+
+The sweep script replays it internally as:
+
+```bash
+ros2 bag play /ros2_ws/BAGS/109_2025-08-14-19-24-29_1212e_ros2 --clock 100 --rate 1.0
+```
+
+## Parameters
+
+The main configuration lives in
+`ros2_ws/src/ground_aware_lidar_odometry/config/galo_params.yaml`.
+
+Important groups:
+
+- `topics` - all input, intermediate, debug, and output topic names.
+- `frames` - IMU, LiDAR, GNSS antenna, map, GNSS map, and body frames.
+- `deskew` - scan timing, queue sizes, speed age, and multithreading.
+- `segmentation.common` and `segmentation.ground` - range limits and ground
+  grid settings.
+- `ground_patch` - ground patch size, point count, thickness, normal, and
+  marker settings.
+- `ground_registration` and `ground_registration_gate_params` - patch matching,
+  z/roll/pitch solve limits, IMU prior, conditioning, and acceptance gates.
+- `planar_registration` and `planar_registration_gate_params` - planar line
+  extraction, matching, damping, priors, and acceptance gates.
+- `prediction` - wheel-model geometry, residual gates, steering correction,
+  pitch-to-z behavior, and data age limits.
+- `pose_merge` - smoothing and fallback blending coefficients.
+- `node.odom_error_csv_enabled` and `node.odom_error_csv_path` - report CSV
+  output consumed by the notebook and tuning script.
+
+## Parameter Tuning
+
+Use the GALO sweep script for repeatable bag-based tuning:
+
+```bash
+cd /home/kkagirins/dev/lidar-odometry-light/ros2_ws
+source install/setup.bash
+ros2 run ground_aware_lidar_odometry galo_param_sweep.py
+```
+
+Or run the source script directly:
+
+```bash
+python3 src/ground_aware_lidar_odometry/scripts/galo_param_sweep.py \
+  src/ground_aware_lidar_odometry/scripts/galo_param_sweep.yaml
+```
+
+The default config is
+`ros2_ws/src/ground_aware_lidar_odometry/scripts/galo_param_sweep.yaml`.
+It defines:
+
+- `bag`, `base_params`, `out_dir`, `setup`, and optional `write_best`.
+- execution settings such as `use_sim_time`, `launch_static_tf`, `rate`,
+  `bag_timeout_sec`, `dry_run`, and `resume`.
+- scoring weights for xy, yaw, z, roll/pitch, max/final xy error, and planar
+  gate rate.
+- staged search over `planar`, `ground`, `prediction`, and `gates_smoothing`.
+
+Typical flow:
+
+1. Start with `search.stages: [planar, ground]`.
+2. Once feature quality is stable, tune `prediction`.
+3. Finish with `gates_smoothing`.
+4. Inspect `${out_dir}/summary.csv`.
+5. Use `${out_dir}/best_galo_params.yaml` as the candidate parameter file.
+
+Useful sweep outputs:
+
+- `summary.csv` - one row per candidate, lower `score` is better.
+- `best_galo_params.yaml` - best parameter set in normal GALO YAML form.
+- `<candidate>.yaml` - generated params for each run.
+- `<candidate>.csv` - odometry error report from GALO.
+- `<candidate>.*.log` - static TF, node, and bag replay logs.
+
+## Report Parsing
+
+`ros2_ws/report_processor.ipynb` reads the GALO report CSV, builds Plotly
+trajectory/error plots, and saves README-ready images to `docs/report_figures`.
+
+Default report path inside the ROS workspace/container:
+
+```text
+/ros2_ws/galo_odometry_error_rep.csv
+```
+
+Fallback path when running the notebook from `ros2_ws`:
+
+```text
+galo_odometry_error_rep.csv
+```
+
+After installing `kaleido`, rerun the notebook to refresh:
+
+- `docs/report_figures/trajectory_map.png`
+- `docs/report_figures/odometry_errors.png`
+
+### Trajectory
+
+![GALO trajectory map](docs/report_figures/trajectory_map.png)
+
+### Odometry Errors
+
+![GALO odometry errors](docs/report_figures/odometry_errors.png)
+
+## ROS Interfaces
+
+Main subscribed topics from `galo_params.yaml`:
+
+| Topic | Role |
+| --- | --- |
+| `/Sensor/lidar_front/rslidar_points` | Raw LiDAR cloud |
+| `/Sensor/imu_front/data` | IMU orientation/angular velocity |
+| `/Sensor/gnss/trimble_nmea_gga` | GNSS position/reference |
+| `/Sensor/gnss/orientation` | GNSS orientation/reference |
+| `/SC/pure_state` | Reference vehicle state |
+| `/FB/wheel_speed_feedback` | Wheel speed prediction input |
+| `/FB/wangle_feedback` | Steering angle prediction input |
+| `/GALO/deskewed_cloud` | Frontend input from deskew node |
+| `/GALO/frame_features` | Backend input from frontend node |
+
+Main published/debug topics:
+
+| Topic | Role |
+| --- | --- |
+| `/GALO/deskewed_cloud` | Deskewed point cloud |
+| `/GALO/deskewed_cloud_heartbeat` | Deskew heartbeat |
+| `/GALO/frame_features` | Extracted planar lines and ground patches |
+| `/GALO/colored_cloud` | Ground/non-ground debug cloud |
+| `/GALO/ground_patch_normals` | Ground patch normal markers |
+| `/GALO/planar_line_markers` | Planar line markers |
+| `/GALO/gt_eulers` | Reference roll/pitch/yaw debug |
+| `/GALO/est_eulers` | Estimated roll/pitch/yaw debug |
+| `/GALO/pure_state_eulers` | Pure-state roll/pitch/yaw debug |
+| `/GALO/true_pose` | Reference pose with covariance |
+| `/GALO/estimate_pose` | Estimated pose with covariance |
+| `/GALO/speed` | Speed debug output |
 
 ## TF Requirements
 
-The node expects a static or dynamic transform between the IMU frame and LiDAR frame.
+GALO expects the configured sensor frames to be available:
 
-Internally, it looks up:
+- `frames.imu_frame: imu`
+- `frames.lidar_frame: rslidar`
+- `frames.pos_antenna_frame: pos_antenna`
+- `frames.orientation_antenna_frame: orientation_antenna`
+- `frames.body_frame: base_link`
+- `frames.map_frame: map`
+- `frames.gnss_map_frame: gnss_map`
 
-```txt
-imu_frame <- lidar_frame
-```
-
-This transform is used to convert IMU rotation delta into the LiDAR frame.
-
-Make sure the transform is available before running the odometry node.
-
-Example static transform command:
+Use the packaged static TF launch when the calibrated transforms are provided in
+`ros2_ws/src/static_tf_publisher/config/sensor_transforms.yaml`:
 
 ```bash
-ros2 run tf2_ros static_transform_publisher \
-  x y z roll pitch yaw imu_frame lidar_frame
+ros2 launch static_tf_publisher static_tf.launch.py
 ```
-
-Replace the values with the calibrated IMU-to-LiDAR extrinsics.
-
----
 
 ## Debugging
 
-The node prints timing information such as:
+Recommended RViz/Foxglove displays:
 
-```txt
-Time measurements (ms): deskew - 3, segmentation - 4, objects_extraction - 2, ground_extraction - 10, planar_registration - 30, ground_registration - 1
-```
+- `/GALO/deskewed_cloud`
+- `/GALO/colored_cloud`
+- `/GALO/ground_patch_normals`
+- `/GALO/planar_line_markers`
+- `/GALO/true_pose`
+- `/GALO/estimate_pose`
+- TF tree
 
-Useful debug logs include:
+Useful checks while tuning:
 
-```txt
-GALO pose
-Ground result
-IMU delta
-Reg debug
-Pose debug
-```
-
-Recommended checks:
-
-* Ground registration should not produce large roll/pitch drift.
-* IMU delta should be small between consecutive LiDAR scans.
-* Planar registration should have enough matches.
-* Ground registration should have enough matches.
-* `dz` should not drift rapidly unless the vehicle is actually changing elevation.
-* Mean residuals should remain bounded.
-
----
-
-## Performance Notes
-
-The registration modules use KD-trees for nearest-neighbor search.
-
-This avoids the original brute-force `O(N²)` matching cost and significantly reduces registration time.
-
-Ground registration and planar registration both build KD-trees from their current local maps. Further optimization is possible by caching KD-trees and rebuilding them only when the local map changes.
-
----
+- `planar_gate_ok` should stay high in the report CSV.
+- `planar_matches` should not collapse for long intervals.
+- Ground registration should not introduce large roll/pitch jumps.
+- `error_z`, `error_roll`, and `error_pitch` should remain bounded.
+- `max_error_x`, `max_error_y`, and `max_error_yaw` in the CSV should improve
+  after each accepted sweep stage.
 
 ## Known Limitations
 
-* The system is currently experimental.
-* Ground registration can become unstable if ground patches are sparse or incorrectly segmented.
-* Planar registration may fail in open areas with few non-ground structures.
-* Roll and pitch should usually be constrained by the IMU prior.
-* Large accumulated map errors can affect future scan-to-map registration.
-* The current implementation uses local sliding-window maps rather than a global map optimization backend.
-
----
-
-## Suggested Visualization
-
-Useful RViz displays:
-
-* `/GALO/deskewed_cloud`
-* `/GALO/colored_cloud`
-* `/GALO/ground_patch_normals`
-* TF tree
-* Odometry/path topic if added later
-
----
-
-## Future Work
-
-Possible improvements:
-
-* Publish a proper `nav_msgs/msg/Odometry` message.
-* Publish a `nav_msgs/msg/Path`.
-* Add configurable parameters through ROS 2 parameters.
-* Cache KD-trees instead of rebuilding them every frame.
-* Add robust loss functions for registration residuals.
-* Add outlier rejection for bad ground patches.
-* Add pose covariance estimation.
-* Add bag replay examples.
-* Add launch and RViz configuration files.
-* Add unit tests for registration and transform logic.
-
----
+- The project is experimental and oriented toward bag-driven development.
+- Local maps are sliding windows, not a global optimization backend.
+- Planar registration can fail in open areas with too few stable non-ground
+  lines.
+- Ground registration is sensitive to sparse or misclassified ground patches.
+- Good static TF calibration is required for IMU/LiDAR/GNSS consistency.
+- Plotly PNG export from the notebook requires `kaleido`.
 
 ## License
 
-TODO: Add license.
-
----
-
-## Author
-
-TODO: Add author information.
-
-
+TODO.
